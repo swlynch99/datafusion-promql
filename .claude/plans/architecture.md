@@ -57,7 +57,7 @@ src/
 │   ├── instant_eval.rs    # ExecutionPlan for InstantVectorEval
 │   └── series_merge.rs    # ExecutionPlan for series merge
 ├── func/
-│   ├── mod.rs             # Public FunctionRegistry, lookup by name, user-extensible
+│   ├── mod.rs             # Function registry, lookup by name
 │   ├── range.rs           # Range vector functions: rate, irate, increase, delta, deriv, etc.
 │   ├── instant.rs         # Instant vector functions: abs, ceil, floor, clamp, etc.
 │   └── aggregate.rs       # Aggregation operators: sum, avg, count, topk, bottomk, quantile, etc.
@@ -65,10 +65,7 @@ src/
 └── types.rs               # Shared types: TimeSeries, Sample, TimeRange, Step, etc.
 ```
 
-All modules under `plan/`, `node/`, `exec/`, and `func/` are **public** so advanced users can:
-- Register custom PromQL functions via `FunctionRegistry`
-- Compose custom logical/physical plan nodes
-- Build their own plan translation on top of the primitives
+All modules under `plan/`, `node/`, `exec/`, and `func/` are **private** (`pub(crate)`). The public API surface is just `PromqlEngine`, `MetricSource` + related types, `QueryResult`, and error types. Internals can be opened up later if there's demand for extensibility.
 
 ---
 
@@ -204,13 +201,7 @@ pub struct RangeSamples {
 
 Users construct the engine with their `MetricSource`, then call `instant_query` or `range_query`.
 
-**Public re-exports:** `MetricSource`, `MetricMeta`, `ExtraColumn`, `TableFormat`, `ColumnMapping`, `QueryResult`, `Labels`, error types, plus the `plan`, `node`, `exec`, and `func` modules for extensibility.
-
-**Extensibility points:**
-- `func::FunctionRegistry` — users can register custom PromQL functions
-- `node::*` — custom logical nodes are public, can be composed in user plans
-- `exec::*` — physical operators are public for custom execution strategies
-- `plan::plan_expr()` is public — users can translate PromQL AST to LogicalPlan and inspect/modify it before execution
+**Public types:** `PromqlEngine`, `MetricSource`, `MetricMeta`, `ExtraColumn`, `TableFormat`, `ColumnMapping`, `QueryResult`, `InstantSample`, `RangeSamples`, `Labels`, error types. Everything else is `pub(crate)`.
 
 ---
 
@@ -340,7 +331,7 @@ This is the trickiest part. PromQL evaluates at discrete time steps:
 | `src/node/instant_eval.rs` | InstantVectorEval logical node |
 | `src/exec/range_eval.rs` | Physical execution for range vectors |
 | `src/exec/instant_eval.rs` | Physical execution for instant vectors |
-| `src/func/mod.rs` | Public FunctionRegistry |
+| `src/func/mod.rs` | Function registry (internal) |
 | `src/func/range.rs` | rate, irate, increase, delta implementations |
 | `src/func/aggregate.rs` | sum, avg, count, etc. |
 | `src/parquet.rs` | (feature = "parquet") ParquetMetricSource |
