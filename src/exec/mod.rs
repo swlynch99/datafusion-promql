@@ -1,6 +1,8 @@
 mod instant_eval;
+mod range_eval;
 
 pub(crate) use instant_eval::InstantVectorExec;
+pub(crate) use range_eval::RangeVectorExec;
 
 use std::sync::Arc;
 
@@ -11,7 +13,7 @@ use datafusion::logical_expr::UserDefinedLogicalNode;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::node::InstantVectorEval;
+use crate::node::{InstantVectorEval, RangeVectorEval};
 
 /// Extension planner that converts our custom logical nodes into physical plans.
 pub(crate) struct PromqlExtensionPlanner;
@@ -35,6 +37,21 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.end_ms,
                 eval.step_ms,
                 eval.lookback_ms,
+                eval.label_columns.clone(),
+            );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<RangeVectorEval>() {
+            let child = Arc::clone(&physical_inputs[0]);
+            let exec = RangeVectorExec::new(
+                child,
+                eval.range_ms,
+                eval.func,
+                eval.eval_ts_ms,
+                eval.start_ms,
+                eval.end_ms,
+                eval.step_ms,
                 eval.label_columns.clone(),
             );
             return Ok(Some(Arc::new(exec)));

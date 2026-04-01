@@ -3,9 +3,11 @@ pub mod error;
 pub mod types;
 
 mod exec;
+mod func;
 mod node;
 mod plan;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -17,8 +19,8 @@ use datafusion::prelude::*;
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::exec::PromqlExtensionPlanner;
-use crate::plan::plan_expr;
-use crate::types::{InstantSample, Labels, QueryResult, TimeRange};
+use crate::plan::{plan_expr, EvalParams};
+use crate::types::{InstantSample, Labels, QueryResult, RangeSamples, TimeRange};
 
 /// Custom query planner that delegates to DefaultPhysicalPlanner with our
 /// extension planner registered.
@@ -75,90 +77,145 @@ impl PromqlEngine {
             start_ms: ts_ms,
             end_ms: ts_ms,
         };
+        let params = EvalParams {
+            eval_ts_ms: Some(ts_ms),
+            start_ms: ts_ms,
+            end_ms: ts_ms,
+            step_ms: 1,
+        };
 
-        let logical_plan = plan_expr(&expr, self.source.as_ref(), time_range, Some(ts_ms)).await?;
+        let logical_plan = plan_expr(&expr, self.source.as_ref(), time_range, params).await?;
 
         let df = self.ctx.execute_logical_plan(logical_plan).await?;
         let batches = df.collect().await?;
 
-        // Convert RecordBatches to QueryResult::Vector.
-        let mut samples = Vec::new();
-        for batch in &batches {
-            let ts_col = batch
-                .column_by_name("timestamp")
-                .ok_or_else(|| PromqlError::Execution(
-                    datafusion::error::DataFusionError::Internal("missing timestamp column".into()),
-                ))?;
-            let val_col = batch
-                .column_by_name("value")
-                .ok_or_else(|| PromqlError::Execution(
-                    datafusion::error::DataFusionError::Internal("missing value column".into()),
-                ))?;
-
-            let ts_arr = ts_col
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-                .ok_or_else(|| PromqlError::Execution(
-                    datafusion::error::DataFusionError::Internal("timestamp must be Int64".into()),
-                ))?;
-            let val_arr = val_col
-                .as_any()
-                .downcast_ref::<arrow::array::Float64Array>()
-                .ok_or_else(|| PromqlError::Execution(
-                    datafusion::error::DataFusionError::Internal("value must be Float64".into()),
-                ))?;
-
-            // Collect label columns (everything except timestamp and value).
-            let schema = batch.schema();
-            let label_col_names: Vec<String> = schema
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .filter(|n| n != "timestamp" && n != "value")
-                .collect();
-
-            let label_arrays: Vec<(&str, &arrow::array::StringArray)> = label_col_names
-                .iter()
-                .map(|name| {
-                    let col = batch.column_by_name(name).unwrap();
-                    let arr = col
-                        .as_any()
-                        .downcast_ref::<arrow::array::StringArray>()
-                        .unwrap();
-                    (name.as_str(), arr)
-                })
-                .collect();
-
-            for row in 0..batch.num_rows() {
-                let mut labels = Labels::new();
-                for &(name, arr) in &label_arrays {
-                    let val = arr.value(row);
-                    if !val.is_empty() {
-                        labels.insert(name.to_string(), val.to_string());
-                    }
-                }
-
-                samples.push(InstantSample {
-                    labels,
-                    timestamp_ms: ts_arr.value(row),
-                    value: val_arr.value(row),
-                });
-            }
-        }
-
-        Ok(QueryResult::Vector(samples))
+        batches_to_vector(&batches)
     }
 
     /// Execute a range query over `[start, end]` with step.
     pub async fn range_query(
         &self,
-        _query: &str,
-        _start: DateTime<Utc>,
-        _end: DateTime<Utc>,
-        _step: std::time::Duration,
+        query: &str,
+        start: DateTime<Utc>,
+        end: DateTime<Utc>,
+        step: std::time::Duration,
     ) -> Result<QueryResult> {
-        Err(PromqlError::NotImplemented(
-            "range_query is not yet implemented".into(),
-        ))
+        let expr = promql_parser::parser::parse(query)
+            .map_err(PromqlError::Parse)?;
+
+        let start_ms = start.timestamp_millis();
+        let end_ms = end.timestamp_millis();
+        let step_ms = step.as_millis() as i64;
+
+        let time_range = TimeRange { start_ms, end_ms };
+        let params = EvalParams {
+            eval_ts_ms: None,
+            start_ms,
+            end_ms,
+            step_ms,
+        };
+
+        let logical_plan = plan_expr(&expr, self.source.as_ref(), time_range, params).await?;
+
+        let df = self.ctx.execute_logical_plan(logical_plan).await?;
+        let batches = df.collect().await?;
+
+        batches_to_matrix(&batches)
     }
+}
+
+/// Convert RecordBatches to `QueryResult::Vector` (instant query result).
+fn batches_to_vector(batches: &[arrow::record_batch::RecordBatch]) -> Result<QueryResult> {
+    let mut samples = Vec::new();
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            let (ts, val, labels) = extract_row(batch, row)?;
+            samples.push(InstantSample {
+                labels,
+                timestamp_ms: ts,
+                value: val,
+            });
+        }
+    }
+
+    Ok(QueryResult::Vector(samples))
+}
+
+/// Convert RecordBatches to `QueryResult::Matrix` (range query result).
+///
+/// Groups rows by their label set and collects `(timestamp, value)` pairs.
+fn batches_to_matrix(batches: &[arrow::record_batch::RecordBatch]) -> Result<QueryResult> {
+    let mut series_map: BTreeMap<Labels, Vec<(i64, f64)>> = BTreeMap::new();
+
+    for batch in batches {
+        for row in 0..batch.num_rows() {
+            let (ts, val, labels) = extract_row(batch, row)?;
+            series_map.entry(labels).or_default().push((ts, val));
+        }
+    }
+
+    let result: Vec<RangeSamples> = series_map
+        .into_iter()
+        .map(|(labels, mut samples)| {
+            samples.sort_by_key(|(ts, _)| *ts);
+            RangeSamples { labels, samples }
+        })
+        .collect();
+
+    Ok(QueryResult::Matrix(result))
+}
+
+/// Extract labels and sample data from a batch for a given row.
+fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(i64, f64, Labels)> {
+    let ts_col = batch
+        .column_by_name("timestamp")
+        .ok_or_else(|| {
+            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+                "missing timestamp column".into(),
+            ))
+        })?;
+    let val_col = batch
+        .column_by_name("value")
+        .ok_or_else(|| {
+            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+                "missing value column".into(),
+            ))
+        })?;
+
+    let ts_arr = ts_col
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .ok_or_else(|| {
+            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+                "timestamp must be Int64".into(),
+            ))
+        })?;
+    let val_arr = val_col
+        .as_any()
+        .downcast_ref::<arrow::array::Float64Array>()
+        .ok_or_else(|| {
+            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+                "value must be Float64".into(),
+            ))
+        })?;
+
+    let schema = batch.schema();
+    let mut labels = Labels::new();
+    for field in schema.fields() {
+        let name = field.name();
+        if name == "timestamp" || name == "value" {
+            continue;
+        }
+        let col = batch.column_by_name(name).unwrap();
+        let arr = col
+            .as_any()
+            .downcast_ref::<arrow::array::StringArray>()
+            .unwrap();
+        let val = arr.value(row);
+        if !val.is_empty() {
+            labels.insert(name.to_string(), val.to_string());
+        }
+    }
+
+    Ok((ts_arr.value(row), val_arr.value(row), labels))
 }

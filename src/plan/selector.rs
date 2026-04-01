@@ -52,10 +52,15 @@ fn convert_matchers(matchers: &[Matcher]) -> Vec<datasource::Matcher> {
 ///
 /// Returns the logical plan and the list of label column names (for grouping
 /// in the InstantVectorEval node).
+///
+/// `extra_range_ms` extends the time range expansion beyond the default lookback.
+/// This is used for range vectors where the window may be larger than the
+/// default 5-minute lookback.
 pub(crate) async fn plan_vector_selector(
     vs: &VectorSelector,
     source: &dyn MetricSource,
     time_range: TimeRange,
+    extra_range_ms: i64,
 ) -> Result<(LogicalPlan, Vec<String>)> {
     let metric_name = vs
         .name
@@ -81,10 +86,10 @@ pub(crate) async fn plan_vector_selector(
         .collect();
     let ds_matchers = convert_matchers(&non_name_matchers);
 
-    // Expand the time range to include the lookback window so that the
-    // InstantVectorEval node has enough data to pick the most recent sample.
+    // Expand the time range to include the lookback window (and any extra
+    // range duration for range vectors) so downstream nodes have enough data.
     let expanded_range = TimeRange {
-        start_ms: time_range.start_ms - crate::types::DEFAULT_LOOKBACK_MS,
+        start_ms: time_range.start_ms - crate::types::DEFAULT_LOOKBACK_MS - extra_range_ms,
         end_ms: time_range.end_ms,
     };
 
