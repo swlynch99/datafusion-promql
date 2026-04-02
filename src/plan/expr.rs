@@ -17,7 +17,7 @@ use super::selector::plan_vector_selector;
 
 /// Parameters controlling how evaluation timestamps are generated.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct EvalParams {
+pub struct EvalParams {
     /// For instant queries: the single evaluation timestamp (ms).
     /// `None` for range queries (timestamps generated from start/end/step).
     pub eval_ts_ms: Option<i64>,
@@ -37,7 +37,7 @@ fn label_columns_from_schema(schema: &datafusion::common::DFSchemaRef) -> Vec<St
 }
 
 /// Translate a promql-parser AST `Expr` into a DataFusion `LogicalPlan`.
-pub(crate) async fn plan_expr(
+pub async fn plan_expr(
     expr: &Expr,
     source: &dyn MetricSource,
     time_range: TimeRange,

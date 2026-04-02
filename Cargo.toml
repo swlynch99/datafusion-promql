@@ -7,6 +7,11 @@ edition = "2024"
 name = "query-graph"
 path = "src/bin/query-graph.rs"
 
+[[bin]]
+name = "query-plan"
+path = "src/bin/query-plan.rs"
+required-features = ["parquet"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 promql-parser = "0.8"
@@ -16,6 +21,7 @@ async-trait = "0.1"
 thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
+tokio = { version = "1", features = ["full"] }
 
 [features]
 parquet = ["datafusion/parquet"]
