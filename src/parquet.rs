@@ -6,9 +6,7 @@ use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
 
-use crate::datasource::{
-    ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSource, TableFormat,
-};
+use crate::datasource::{ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSource, TableFormat};
 use crate::error::{PromqlError, Result};
 use crate::types::{Labels, TimeRange};
 
@@ -156,11 +154,7 @@ fn build_metric_metadata(
     mapping: &ColumnMapping,
 ) -> Vec<MetricMeta> {
     let schema = provider.schema();
-    let ignore: BTreeSet<&str> = mapping
-        .ignore_columns
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let ignore: BTreeSet<&str> = mapping.ignore_columns.iter().map(|s| s.as_str()).collect();
 
     // Collect (metric_name -> set of label names).
     let mut metric_labels: std::collections::BTreeMap<String, BTreeSet<String>> =

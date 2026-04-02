@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use chrono::TimeZone;
 
+use datafusion_promql::PromqlEngine;
 use datafusion_promql::datasource::MetricSource;
 use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::QueryResult;
-use datafusion_promql::PromqlEngine;
 
 /// Timestamp range of the test parquet file (nanoseconds converted to millis).
 /// Data spans roughly 1750106216002 .. 1750106506001 (about 290 seconds).
@@ -60,13 +60,14 @@ async fn test_simple_metric_instant_query() {
 
     match result {
         QueryResult::Vector(samples) => {
-            assert_eq!(samples.len(), 1, "cpu_cores should have 1 series (no labels)");
+            assert_eq!(
+                samples.len(),
+                1,
+                "cpu_cores should have 1 series (no labels)"
+            );
             assert!(samples[0].value > 0.0, "cpu_cores should be positive");
             // __name__ label should be present.
-            assert_eq!(
-                samples[0].labels.get("__name__").unwrap(),
-                "cpu_cores"
-            );
+            assert_eq!(samples[0].labels.get("__name__").unwrap(), "cpu_cores");
         }
         other => panic!("expected Vector, got {other:?}"),
     }

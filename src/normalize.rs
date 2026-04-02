@@ -3,6 +3,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::datasource::{ColumnMapping, MatchOp, Matcher};
+use crate::error::{PromqlError, Result};
+use crate::types::Labels;
 use arrow::array::{Float64Builder, Int64Builder, RecordBatch, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -10,12 +13,9 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::provider_as_source;
 use datafusion::execution::TaskContext;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, TableType};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
-use crate::datasource::{ColumnMapping, MatchOp, Matcher};
-use crate::error::{PromqlError, Result};
-use crate::types::Labels;
 
 /// A column that matched the requested metric, with its parsed labels.
 #[derive(Debug, Clone)]
@@ -34,11 +34,7 @@ fn find_matching_columns(
     matchers: &[Matcher],
 ) -> Result<(Vec<MatchedColumn>, BTreeSet<String>)> {
     let schema = provider.schema();
-    let ignore: BTreeSet<&str> = mapping
-        .ignore_columns
-        .iter()
-        .map(|s| s.as_str())
-        .collect();
+    let ignore: BTreeSet<&str> = mapping.ignore_columns.iter().map(|s| s.as_str()).collect();
 
     let mut matched: Vec<MatchedColumn> = Vec::new();
 
@@ -302,7 +298,10 @@ impl ExecutionPlan for UnpivotExec {
             )
         });
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(stream_schema, stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            stream_schema,
+            stream,
+        )))
     }
 }
 
@@ -319,7 +318,8 @@ fn unpivot_batches(
     let total_input_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
     let total_output_rows = total_input_rows * matched_columns.len();
 
-    let mut name_builder = StringBuilder::with_capacity(total_output_rows, metric_name.len() * total_output_rows);
+    let mut name_builder =
+        StringBuilder::with_capacity(total_output_rows, metric_name.len() * total_output_rows);
     let mut ts_builder = Int64Builder::with_capacity(total_output_rows);
     let mut val_builder = Float64Builder::with_capacity(total_output_rows);
 
@@ -331,34 +331,27 @@ fn unpivot_batches(
 
     for batch in batches {
         // Find the timestamp column in this batch.
-        let ts_col = batch
-            .column_by_name(ts_column_name)
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Internal(format!(
-                    "missing timestamp column '{ts_column_name}'"
-                ))
-            })?;
+        let ts_col = batch.column_by_name(ts_column_name).ok_or_else(|| {
+            datafusion::error::DataFusionError::Internal(format!(
+                "missing timestamp column '{ts_column_name}'"
+            ))
+        })?;
 
         // Timestamp may be UInt64 or Int64 — handle both.
-        let ts_values: Vec<i64> = if let Some(arr) = ts_col
-            .as_any()
-            .downcast_ref::<arrow::array::UInt64Array>()
-        {
-            (0..batch.num_rows())
-                .map(|i| (arr.value(i) / 1_000_000) as i64)
-                .collect()
-        } else if let Some(arr) = ts_col
-            .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-        {
-            (0..batch.num_rows())
-                .map(|i| arr.value(i) / 1_000_000)
-                .collect()
-        } else {
-            return Err(datafusion::error::DataFusionError::Internal(
-                "timestamp column must be UInt64 or Int64".into(),
-            ));
-        };
+        let ts_values: Vec<i64> =
+            if let Some(arr) = ts_col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                (0..batch.num_rows())
+                    .map(|i| (arr.value(i) / 1_000_000) as i64)
+                    .collect()
+            } else if let Some(arr) = ts_col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                (0..batch.num_rows())
+                    .map(|i| arr.value(i) / 1_000_000)
+                    .collect()
+            } else {
+                return Err(datafusion::error::DataFusionError::Internal(
+                    "timestamp column must be UInt64 or Int64".into(),
+                ));
+            };
 
         // For each matched metric column, emit one row per input row.
         for mc in matched_columns {
@@ -370,29 +363,23 @@ fn unpivot_batches(
             })?;
 
             // Cast to f64 values.
-            let f64_values: Vec<f64> =
-                if let Some(arr) = val_col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    (0..batch.num_rows())
-                        .map(|i| arr.value(i) as f64)
-                        .collect()
-                } else if let Some(arr) =
-                    val_col.as_any().downcast_ref::<arrow::array::Int64Array>()
-                {
-                    (0..batch.num_rows())
-                        .map(|i| arr.value(i) as f64)
-                        .collect()
-                } else if let Some(arr) =
-                    val_col.as_any().downcast_ref::<arrow::array::Float64Array>()
-                {
-                    (0..batch.num_rows())
-                        .map(|i| arr.value(i))
-                        .collect()
-                } else {
-                    return Err(datafusion::error::DataFusionError::Internal(format!(
-                        "metric column '{}' has unsupported type",
-                        mc.col_name
-                    )));
-                };
+            let f64_values: Vec<f64> = if let Some(arr) =
+                val_col.as_any().downcast_ref::<arrow::array::UInt64Array>()
+            {
+                (0..batch.num_rows()).map(|i| arr.value(i) as f64).collect()
+            } else if let Some(arr) = val_col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                (0..batch.num_rows()).map(|i| arr.value(i) as f64).collect()
+            } else if let Some(arr) = val_col
+                .as_any()
+                .downcast_ref::<arrow::array::Float64Array>()
+            {
+                (0..batch.num_rows()).map(|i| arr.value(i)).collect()
+            } else {
+                return Err(datafusion::error::DataFusionError::Internal(format!(
+                    "metric column '{}' has unsupported type",
+                    mc.col_name
+                )));
+            };
 
             for row in 0..batch.num_rows() {
                 name_builder.append_value(metric_name);

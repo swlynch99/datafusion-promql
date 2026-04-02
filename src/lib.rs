@@ -4,8 +4,8 @@ pub mod types;
 
 pub mod exec;
 mod func;
-mod normalize;
 mod node;
+mod normalize;
 pub mod plan;
 
 #[cfg(feature = "parquet")]
