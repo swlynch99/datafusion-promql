@@ -3,7 +3,12 @@ name = "datafusion-promql"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "query-graph"
+path = "src/bin/query-graph.rs"
+
 [dependencies]
+clap = { version = "4", features = ["derive"] }
 promql-parser = "0.8"
 datafusion = "53"
 arrow = { version = "58", features = ["prettyprint"] }
