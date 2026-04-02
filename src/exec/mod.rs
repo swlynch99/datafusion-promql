@@ -1,6 +1,10 @@
+mod aggregate_eval;
+mod binary_eval;
 mod instant_eval;
 mod range_eval;
 
+pub(crate) use aggregate_eval::AggregateExec;
+pub(crate) use binary_eval::{BinaryExec, ScalarBinaryExec};
 pub(crate) use instant_eval::InstantVectorExec;
 pub(crate) use range_eval::RangeVectorExec;
 
@@ -13,7 +17,7 @@ use datafusion::logical_expr::UserDefinedLogicalNode;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::node::{InstantVectorEval, RangeVectorEval};
+use crate::node::{AggregateEval, BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval};
 
 /// Extension planner that converts our custom logical nodes into physical plans.
 pub(crate) struct PromqlExtensionPlanner;
@@ -53,6 +57,44 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.end_ms,
                 eval.step_ms,
                 eval.label_columns.clone(),
+            );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<AggregateEval>() {
+            let child = Arc::clone(&physical_inputs[0]);
+            let exec = AggregateExec::new(child, eval.func, eval.grouping_labels.clone());
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<BinaryEval>() {
+            let lhs = Arc::clone(&physical_inputs[0]);
+            let rhs = Arc::clone(&physical_inputs[1]);
+            // Convert the logical node's DFSchemaRef to a physical SchemaRef.
+            let output_schema: arrow::datatypes::SchemaRef =
+                Arc::new(eval.output_schema.as_arrow().clone());
+            let exec = BinaryExec::new(
+                lhs,
+                rhs,
+                eval.op,
+                eval.return_bool,
+                eval.matching.clone(),
+                output_schema,
+            );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<ScalarBinaryEval>() {
+            let child = Arc::clone(&physical_inputs[0]);
+            let output_schema: arrow::datatypes::SchemaRef =
+                Arc::new(eval.output_schema.as_arrow().clone());
+            let exec = ScalarBinaryExec::new(
+                child,
+                eval.scalar_value,
+                eval.op,
+                eval.scalar_is_lhs,
+                eval.return_bool,
+                output_schema,
             );
             return Ok(Some(Arc::new(exec)));
         }
