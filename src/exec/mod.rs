@@ -22,7 +22,7 @@ use crate::node::{
 };
 
 /// Extension planner that converts our custom logical nodes into physical plans.
-pub(crate) struct PromqlExtensionPlanner;
+pub struct PromqlExtensionPlanner;
 
 #[async_trait]
 impl ExtensionPlanner for PromqlExtensionPlanner {

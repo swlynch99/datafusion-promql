@@ -2,10 +2,10 @@ pub mod datasource;
 pub mod error;
 pub mod types;
 
-mod exec;
+pub mod exec;
 mod func;
 mod node;
-mod plan;
+pub mod plan;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
