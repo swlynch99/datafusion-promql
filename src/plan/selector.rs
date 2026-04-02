@@ -98,10 +98,29 @@ pub(crate) async fn plan_vector_selector(
         .await?;
 
     match format {
-        TableFormat::Wide(_) => {
-            return Err(PromqlError::NotImplemented(
-                "wide format normalization not yet implemented".into(),
-            ));
+        TableFormat::Wide(mapping) => {
+            // Normalize wide format to long format via UNION ALL projections.
+            let (plan, label_columns) = crate::normalize::normalize_wide_to_long(
+                provider,
+                &mapping,
+                metric_name,
+                &ds_matchers,
+            )?;
+
+            // Apply time range filter and sort on the normalized output.
+            let plan = LogicalPlanBuilder::from(plan)
+                .filter(
+                    col("timestamp")
+                        .gt_eq(lit(expanded_range.start_ms))
+                        .and(col("timestamp").lt_eq(lit(expanded_range.end_ms))),
+                )
+                .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+                .sort(vec![col("timestamp").sort(true, false)])
+                .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
+                .build()
+                .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
+
+            return Ok((plan, label_columns));
         }
         TableFormat::Long => {}
     }
