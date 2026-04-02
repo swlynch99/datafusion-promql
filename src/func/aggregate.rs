@@ -77,9 +77,7 @@ mod tests {
 
     #[test]
     fn test_count() {
-        assert!(
-            (AggregateFunction::Count.evaluate(&[1.0, 2.0, 3.0]) - 3.0).abs() < f64::EPSILON
-        );
+        assert!((AggregateFunction::Count.evaluate(&[1.0, 2.0, 3.0]) - 3.0).abs() < f64::EPSILON);
     }
 
     #[test]

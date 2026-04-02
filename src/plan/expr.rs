@@ -236,8 +236,7 @@ async fn plan_binary(
             // scalar op vector
             let scalar_val = extract_scalar(&bin.lhs)?;
             let rhs_plan = Box::pin(plan_expr(&bin.rhs, source, time_range, params)).await?;
-            let node =
-                ScalarBinaryEval::new(rhs_plan, scalar_val, op, true, return_bool)?;
+            let node = ScalarBinaryEval::new(rhs_plan, scalar_val, op, true, return_bool)?;
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),
             }))
@@ -246,8 +245,7 @@ async fn plan_binary(
             // vector op scalar
             let scalar_val = extract_scalar(&bin.rhs)?;
             let lhs_plan = Box::pin(plan_expr(&bin.lhs, source, time_range, params)).await?;
-            let node =
-                ScalarBinaryEval::new(lhs_plan, scalar_val, op, false, return_bool)?;
+            let node = ScalarBinaryEval::new(lhs_plan, scalar_val, op, false, return_bool)?;
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),
             }))

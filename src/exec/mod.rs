@@ -17,7 +17,9 @@ use datafusion::logical_expr::UserDefinedLogicalNode;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::node::{AggregateEval, BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval};
+use crate::node::{
+    AggregateEval, BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval,
+};
 
 /// Extension planner that converts our custom logical nodes into physical plans.
 pub(crate) struct PromqlExtensionPlanner;

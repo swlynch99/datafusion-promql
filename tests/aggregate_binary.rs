@@ -51,9 +51,9 @@ impl MetricSource for MultiMetricSource {
                 return Ok((Arc::new(table), TableFormat::Long));
             }
         }
-        Err(datafusion_promql::error::PromqlError::DataSource(
-            format!("metric not found: {metric_name}"),
-        ))
+        Err(datafusion_promql::error::PromqlError::DataSource(format!(
+            "metric not found: {metric_name}"
+        )))
     }
 
     async fn list_metrics(&self, _name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>> {
@@ -557,10 +557,7 @@ async fn test_vector_plus_scalar() {
     // At t=2000: host1=30, host2=30, host3=35
     // + 100 -> 130, 130, 135
     let ts = chrono::Utc.timestamp_millis_opt(2000).unwrap();
-    let result = engine
-        .instant_query("cpu_usage + 100", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("cpu_usage + 100", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {
@@ -595,10 +592,7 @@ async fn test_scalar_plus_vector() {
     let engine = PromqlEngine::new(Arc::new(source));
 
     let ts = chrono::Utc.timestamp_millis_opt(2000).unwrap();
-    let result = engine
-        .instant_query("100 + cpu_usage", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("100 + cpu_usage", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {
@@ -623,10 +617,7 @@ async fn test_vector_mul_scalar() {
     let engine = PromqlEngine::new(Arc::new(source));
 
     let ts = chrono::Utc.timestamp_millis_opt(2000).unwrap();
-    let result = engine
-        .instant_query("cpu_usage * 2", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("cpu_usage * 2", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {
@@ -659,10 +650,7 @@ async fn test_comparison_filter() {
     // At t=2000: host1=30, host2=30, host3=35
     // cpu_usage > 30 should only return host3 (35 > 30)
     let ts = chrono::Utc.timestamp_millis_opt(2000).unwrap();
-    let result = engine
-        .instant_query("cpu_usage > 30", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("cpu_usage > 30", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {

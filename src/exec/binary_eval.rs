@@ -110,9 +110,7 @@ fn matching_key(
             label_columns
                 .iter()
                 .zip(label_values.iter())
-                .filter(|(name, _)| {
-                    !ignoring.contains(name) && name.as_str() != "__name__"
-                })
+                .filter(|(name, _)| !ignoring.contains(name) && name.as_str() != "__name__")
                 .map(|(_, v)| v.clone())
                 .collect()
         }
@@ -175,7 +173,10 @@ fn collect_series(
 
             let mk = matching_key(label_columns, &full_key, matching);
 
-            series_map.entry(full_key.clone()).or_default().push((ts, val));
+            series_map
+                .entry(full_key.clone())
+                .or_default()
+                .push((ts, val));
 
             let full_keys = match_to_full.entry(mk).or_default();
             if !full_keys.contains(&full_key) {
@@ -303,8 +304,11 @@ impl ExecutionPlan for BinaryExec {
                             if rhs_match_to_full.contains_key(mk) {
                                 for lhs_key in lhs_keys {
                                     let samples = &lhs_series[lhs_key];
-                                    let out_vals =
-                                        output_label_values(lhs_key, &lhs_label_columns, &output_labels);
+                                    let out_vals = output_label_values(
+                                        lhs_key,
+                                        &lhs_label_columns,
+                                        &output_labels,
+                                    );
                                     for &(ts, val) in samples {
                                         out_ts.append_value(ts);
                                         out_val.append_value(val);
@@ -321,8 +325,11 @@ impl ExecutionPlan for BinaryExec {
                         for lhs_keys in lhs_match_to_full.values() {
                             for lhs_key in lhs_keys {
                                 let samples = &lhs_series[lhs_key];
-                                let out_vals =
-                                    output_label_values(lhs_key, &lhs_label_columns, &output_labels);
+                                let out_vals = output_label_values(
+                                    lhs_key,
+                                    &lhs_label_columns,
+                                    &output_labels,
+                                );
                                 for &(ts, val) in samples {
                                     out_ts.append_value(ts);
                                     out_val.append_value(val);
@@ -336,8 +343,11 @@ impl ExecutionPlan for BinaryExec {
                             if !lhs_match_to_full.contains_key(mk) {
                                 for rhs_key in rhs_keys {
                                     let samples = &rhs_series[rhs_key];
-                                    let out_vals =
-                                        output_label_values(rhs_key, &rhs_label_columns, &output_labels);
+                                    let out_vals = output_label_values(
+                                        rhs_key,
+                                        &rhs_label_columns,
+                                        &output_labels,
+                                    );
                                     for &(ts, val) in samples {
                                         out_ts.append_value(ts);
                                         out_val.append_value(val);
@@ -355,8 +365,11 @@ impl ExecutionPlan for BinaryExec {
                             if !rhs_match_to_full.contains_key(mk) {
                                 for lhs_key in lhs_keys {
                                     let samples = &lhs_series[lhs_key];
-                                    let out_vals =
-                                        output_label_values(lhs_key, &lhs_label_columns, &output_labels);
+                                    let out_vals = output_label_values(
+                                        lhs_key,
+                                        &lhs_label_columns,
+                                        &output_labels,
+                                    );
                                     for &(ts, val) in samples {
                                         out_ts.append_value(ts);
                                         out_val.append_value(val);
@@ -495,9 +508,17 @@ impl ScalarBinaryExec {
 impl DisplayAs for ScalarBinaryExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.scalar_is_lhs {
-            write!(f, "ScalarBinaryExec: {} {} vector", self.scalar_value, self.op)
+            write!(
+                f,
+                "ScalarBinaryExec: {} {} vector",
+                self.scalar_value, self.op
+            )
         } else {
-            write!(f, "ScalarBinaryExec: vector {} {}", self.op, self.scalar_value)
+            write!(
+                f,
+                "ScalarBinaryExec: vector {} {}",
+                self.op, self.scalar_value
+            )
         }
     }
 }

@@ -437,10 +437,7 @@ impl ScalarBinaryEval {
 }
 
 /// For scalar-vector binary ops, output schema is same as input but may drop __name__.
-fn compute_scalar_binary_output_schema(
-    input: &LogicalPlan,
-    op: &BinaryOp,
-) -> Result<DFSchemaRef> {
+fn compute_scalar_binary_output_schema(input: &LogicalPlan, op: &BinaryOp) -> Result<DFSchemaRef> {
     if !op.drops_metric_name() {
         return Ok(Arc::clone(input.schema()));
     }
@@ -478,9 +475,17 @@ impl UserDefinedLogicalNodeCore for ScalarBinaryEval {
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.scalar_is_lhs {
-            write!(f, "ScalarBinaryEval: {} {} vector", self.scalar_value, self.op)
+            write!(
+                f,
+                "ScalarBinaryEval: {} {} vector",
+                self.scalar_value, self.op
+            )
         } else {
-            write!(f, "ScalarBinaryEval: vector {} {}", self.op, self.scalar_value)
+            write!(
+                f,
+                "ScalarBinaryEval: vector {} {}",
+                self.op, self.scalar_value
+            )
         }
     }
 

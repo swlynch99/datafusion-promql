@@ -174,10 +174,7 @@ impl ExecutionPlan for AggregateExec {
 
                     let key: Vec<String> = grouping_arrays
                         .iter()
-                        .map(|arr| {
-                            arr.map(|a| a.value(row).to_string())
-                                .unwrap_or_default()
-                        })
+                        .map(|arr| arr.map(|a| a.value(row).to_string()).unwrap_or_default())
                         .collect();
 
                     group_map.entry((ts, key)).or_default().push(val);
@@ -187,12 +184,14 @@ impl ExecutionPlan for AggregateExec {
             // Apply aggregation to each group and build output.
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
-            let mut out_labels: Vec<StringBuilder> =
-                grouping_labels.iter().map(|_| StringBuilder::new()).collect();
+            let mut out_labels: Vec<StringBuilder> = grouping_labels
+                .iter()
+                .map(|_| StringBuilder::new())
+                .collect();
 
             // Sort keys for deterministic output.
             let mut entries: Vec<_> = group_map.into_iter().collect();
-            entries.sort_by(|a, b| a.0 .0.cmp(&b.0 .0).then(a.0 .1.cmp(&b.0 .1)));
+            entries.sort_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.cmp(&b.0.1)));
 
             for ((ts, key), values) in entries {
                 if values.is_empty() {
