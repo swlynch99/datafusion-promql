@@ -14,6 +14,13 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 
 use crate::node::{BinaryOp, VectorMatching};
 
+/// A series key is a vector of label values identifying a unique series.
+type SeriesKey = Vec<String>;
+/// Maps a series key to its (timestamp, value) samples.
+type SeriesMap = HashMap<SeriesKey, Vec<(i64, f64)>>;
+/// Maps a matching key to the list of full series keys that share it.
+type MatchKeyMap = HashMap<SeriesKey, Vec<SeriesKey>>;
+
 // ---------------------------------------------------------------------------
 // BinaryExec: vector op vector
 // ---------------------------------------------------------------------------
@@ -127,14 +134,11 @@ fn collect_series(
     batches: &[RecordBatch],
     label_columns: &[String],
     matching: &VectorMatching,
-) -> (
-    HashMap<Vec<String>, Vec<(i64, f64)>>,
-    HashMap<Vec<String>, Vec<Vec<String>>>,
-) {
+) -> (SeriesMap, MatchKeyMap) {
     // full_key -> samples
-    let mut series_map: HashMap<Vec<String>, Vec<(i64, f64)>> = HashMap::new();
+    let mut series_map: SeriesMap = HashMap::new();
     // match_key -> list of full_keys that map to it
-    let mut match_to_full: HashMap<Vec<String>, Vec<Vec<String>>> = HashMap::new();
+    let mut match_to_full: MatchKeyMap = HashMap::new();
 
     for batch in batches {
         let ts_arr = batch
@@ -314,7 +318,7 @@ impl ExecutionPlan for BinaryExec {
                     }
                     BinaryOp::Lor => {
                         // Return all LHS series + RHS series without a match in LHS.
-                        for (_, lhs_keys) in &lhs_match_to_full {
+                        for lhs_keys in lhs_match_to_full.values() {
                             for lhs_key in lhs_keys {
                                 let samples = &lhs_series[lhs_key];
                                 let out_vals =
@@ -369,7 +373,7 @@ impl ExecutionPlan for BinaryExec {
             } else {
                 // Arithmetic and comparison operators: match per timestamp.
                 // Build timestamp-indexed maps for RHS.
-                let mut rhs_by_match_and_ts: HashMap<Vec<String>, HashMap<i64, (f64, Vec<String>)>> =
+                let mut rhs_by_match_and_ts: HashMap<SeriesKey, HashMap<i64, (f64, SeriesKey)>> =
                     HashMap::new();
 
                 for (mk, rhs_keys) in &rhs_match_to_full {

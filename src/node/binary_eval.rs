@@ -389,8 +389,8 @@ impl Hash for BinaryEval {
 }
 
 impl PartialOrd for BinaryEval {
-    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-        Some(Ordering::Equal)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -528,8 +528,8 @@ impl Hash for ScalarBinaryEval {
 }
 
 impl PartialOrd for ScalarBinaryEval {
-    fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-        Some(Ordering::Equal)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
