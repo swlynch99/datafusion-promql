@@ -12,7 +12,9 @@ use datafusion_promql::error::{PromqlError, Result};
 use datafusion_promql::types::TimeRange;
 
 #[derive(Parser)]
-#[command(about = "Show DataFusion logical and physical plans for a PromQL query against a parquet file")]
+#[command(
+    about = "Show DataFusion logical and physical plans for a PromQL query against a parquet file"
+)]
 struct Cli {
     /// Path to the parquet file
     #[arg(short, long)]
@@ -106,8 +108,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(source);
 
     // Parse and plan
-    let expr =
-        promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
+    let expr = promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
 
     let ts_ms = cli.timestamp;
     let time_range = TimeRange {
@@ -132,21 +133,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     if show_physical {
         // Build a session with the PromQL extension planner.
-        let state = SessionStateBuilder::new()
-            .with_default_features()
-            .build();
+        let state = SessionStateBuilder::new().with_default_features().build();
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             datafusion_promql::exec::PromqlExtensionPlanner,
         )]);
-        let physical_plan = planner
-            .create_physical_plan(&logical_plan, &state)
-            .await?;
+        let physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
 
         println!("=== Physical Plan ===");
         println!(
             "{}",
-            datafusion::physical_plan::displayable(physical_plan.as_ref())
-                .indent(true)
+            datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true)
         );
     }
 
