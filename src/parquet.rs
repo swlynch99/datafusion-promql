@@ -82,7 +82,7 @@ impl MetricSource for ParquetMetricSource {
 }
 
 /// Build a [`ColumnMapping`] for the Rezolus parquet column naming convention.
-fn rezolus_column_mapping() -> ColumnMapping {
+pub fn rezolus_column_mapping() -> ColumnMapping {
     ColumnMapping {
         timestamp_column: "timestamp".to_string(),
         ignore_columns: vec!["duration".to_string()],
@@ -101,7 +101,7 @@ fn rezolus_column_mapping() -> ColumnMapping {
 ///    - If remainder contains `/`: `metric/subtype/id` → `{op="subtype", id="id"}`
 ///    - Otherwise: `metric/subtype` → `{op="subtype"}`
 /// 4. No `/` → plain metric, no labels
-fn rezolus_parse_column(col_name: &str) -> Option<(String, Labels)> {
+pub fn rezolus_parse_column(col_name: &str) -> Option<(String, Labels)> {
     // Skip histogram bucket columns.
     if col_name.ends_with(":buckets") {
         return None;
