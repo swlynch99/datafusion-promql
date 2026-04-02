@@ -32,6 +32,7 @@ pub(crate) struct RangeVectorExec {
 }
 
 impl RangeVectorExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
         range_ms: i64,
