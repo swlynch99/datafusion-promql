@@ -1,7 +1,7 @@
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Like, LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::*;
-use promql_parser::label::{MatchOp, Matcher, METRIC_NAME};
+use promql_parser::label::{METRIC_NAME, MatchOp, Matcher};
 use promql_parser::parser::VectorSelector;
 
 use crate::datasource::{self, MetricSource, TableFormat};
@@ -118,13 +118,8 @@ pub(crate) async fn plan_vector_selector(
 
     // Build a table scan using provider_as_source to convert TableProvider -> TableSource.
     let table_source = provider_as_source(provider);
-    let plan = LogicalPlanBuilder::scan_with_filters(
-        metric_name,
-        table_source,
-        None,
-        vec![],
-    )
-    .map_err(|e| PromqlError::Plan(format!("failed to build table scan: {e}")))?;
+    let plan = LogicalPlanBuilder::scan_with_filters(metric_name, table_source, None, vec![])
+        .map_err(|e| PromqlError::Plan(format!("failed to build table scan: {e}")))?;
 
     // Apply label matchers as filters.
     let plan = non_name_matchers
@@ -148,7 +143,9 @@ pub(crate) async fn plan_vector_selector(
         .sort(vec![col("timestamp").sort(true, false)])
         .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?;
 
-    let plan = plan.build().map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
+    let plan = plan
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
 
     Ok((plan, label_columns))
 }

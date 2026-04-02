@@ -10,9 +10,7 @@ use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use crate::func::RangeFunction;
 
@@ -79,7 +77,11 @@ impl RangeVectorExec {
 
 impl DisplayAs for RangeVectorExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "RangeVectorExec: func={}, range={}ms", self.func, self.range_ms)
+        write!(
+            f,
+            "RangeVectorExec: func={}, range={}ms",
+            self.func, self.range_ms
+        )
     }
 }
 
@@ -149,9 +151,7 @@ impl ExecutionPlan for RangeVectorExec {
                 let ts_col = batch
                     .column_by_name("timestamp")
                     .expect("missing timestamp column");
-                let val_col = batch
-                    .column_by_name("value")
-                    .expect("missing value column");
+                let val_col = batch.column_by_name("value").expect("missing value column");
 
                 let ts_arr = ts_col
                     .as_any()

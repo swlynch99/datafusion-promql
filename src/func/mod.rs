@@ -1,3 +1,3 @@
 pub(crate) mod range;
 
-pub(crate) use range::{lookup_range_function, RangeFunction};
+pub(crate) use range::{RangeFunction, lookup_range_function};

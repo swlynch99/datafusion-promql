@@ -73,9 +73,7 @@ impl RangeFunction {
                 };
                 Some(increase / dt_secs)
             }
-            Self::Increase => {
-                Some(counter_increase(samples))
-            }
+            Self::Increase => Some(counter_increase(samples)),
             Self::Delta => {
                 let (_, first_val) = samples[0];
                 let (_, last_val) = samples[samples.len() - 1];
@@ -119,7 +117,10 @@ mod tests {
             (5000, 50.0),
         ];
         let result = RangeFunction::Rate.evaluate(&samples).unwrap();
-        assert!((result - 10.0).abs() < f64::EPSILON, "expected 10.0, got {result}");
+        assert!(
+            (result - 10.0).abs() < f64::EPSILON,
+            "expected 10.0, got {result}"
+        );
     }
 
     #[test]
@@ -130,11 +131,14 @@ mod tests {
             (0, 0.0),
             (1000, 10.0),
             (2000, 20.0),
-            (3000, 5.0),  // reset
+            (3000, 5.0), // reset
             (4000, 15.0),
         ];
         let result = RangeFunction::Rate.evaluate(&samples).unwrap();
-        assert!((result - 8.75).abs() < f64::EPSILON, "expected 8.75, got {result}");
+        assert!(
+            (result - 8.75).abs() < f64::EPSILON,
+            "expected 8.75, got {result}"
+        );
     }
 
     #[test]
@@ -161,32 +165,31 @@ mod tests {
             (5000, 50.0),
         ];
         let result = RangeFunction::Irate.evaluate(&samples).unwrap();
-        assert!((result - 10.0).abs() < f64::EPSILON, "expected 10.0, got {result}");
+        assert!(
+            (result - 10.0).abs() < f64::EPSILON,
+            "expected 10.0, got {result}"
+        );
     }
 
     #[test]
     fn test_irate_with_counter_reset() {
         // Last two: (2000, 20) and (3000, 5) -> reset, increase = 5, dt = 1s
-        let samples = vec![
-            (0, 0.0),
-            (1000, 10.0),
-            (2000, 20.0),
-            (3000, 5.0),
-        ];
+        let samples = vec![(0, 0.0), (1000, 10.0), (2000, 20.0), (3000, 5.0)];
         let result = RangeFunction::Irate.evaluate(&samples).unwrap();
-        assert!((result - 5.0).abs() < f64::EPSILON, "expected 5.0, got {result}");
+        assert!(
+            (result - 5.0).abs() < f64::EPSILON,
+            "expected 5.0, got {result}"
+        );
     }
 
     #[test]
     fn test_increase_basic() {
-        let samples = vec![
-            (0, 100.0),
-            (1000, 110.0),
-            (2000, 120.0),
-            (3000, 130.0),
-        ];
+        let samples = vec![(0, 100.0), (1000, 110.0), (2000, 120.0), (3000, 130.0)];
         let result = RangeFunction::Increase.evaluate(&samples).unwrap();
-        assert!((result - 30.0).abs() < f64::EPSILON, "expected 30.0, got {result}");
+        assert!(
+            (result - 30.0).abs() < f64::EPSILON,
+            "expected 30.0, got {result}"
+        );
     }
 
     #[test]
@@ -200,30 +203,30 @@ mod tests {
             (4000, 15.0),
         ];
         let result = RangeFunction::Increase.evaluate(&samples).unwrap();
-        assert!((result - 35.0).abs() < f64::EPSILON, "expected 35.0, got {result}");
+        assert!(
+            (result - 35.0).abs() < f64::EPSILON,
+            "expected 35.0, got {result}"
+        );
     }
 
     #[test]
     fn test_delta_basic() {
-        let samples = vec![
-            (0, 10.0),
-            (1000, 15.0),
-            (2000, 12.0),
-            (3000, 18.0),
-        ];
+        let samples = vec![(0, 10.0), (1000, 15.0), (2000, 12.0), (3000, 18.0)];
         let result = RangeFunction::Delta.evaluate(&samples).unwrap();
-        assert!((result - 8.0).abs() < f64::EPSILON, "expected 8.0, got {result}");
+        assert!(
+            (result - 8.0).abs() < f64::EPSILON,
+            "expected 8.0, got {result}"
+        );
     }
 
     #[test]
     fn test_delta_negative() {
-        let samples = vec![
-            (0, 20.0),
-            (1000, 15.0),
-            (2000, 10.0),
-        ];
+        let samples = vec![(0, 20.0), (1000, 15.0), (2000, 10.0)];
         let result = RangeFunction::Delta.evaluate(&samples).unwrap();
-        assert!((result - (-10.0)).abs() < f64::EPSILON, "expected -10.0, got {result}");
+        assert!(
+            (result - (-10.0)).abs() < f64::EPSILON,
+            "expected -10.0, got {result}"
+        );
     }
 
     #[test]

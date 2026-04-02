@@ -29,7 +29,12 @@ pub(crate) struct InstantVectorEval {
 
 impl InstantVectorEval {
     /// Create a node for an instant query at a single timestamp.
-    pub fn instant(input: LogicalPlan, timestamp_ms: i64, lookback_ms: i64, label_columns: Vec<String>) -> Self {
+    pub fn instant(
+        input: LogicalPlan,
+        timestamp_ms: i64,
+        lookback_ms: i64,
+        label_columns: Vec<String>,
+    ) -> Self {
         Self {
             input,
             eval_ts_ms: Some(timestamp_ms),
@@ -81,7 +86,11 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(ts) = self.eval_ts_ms {
-            write!(f, "InstantVectorEval: ts={ts}, lookback={}ms", self.lookback_ms)
+            write!(
+                f,
+                "InstantVectorEval: ts={ts}, lookback={}ms",
+                self.lookback_ms
+            )
         } else {
             write!(
                 f,

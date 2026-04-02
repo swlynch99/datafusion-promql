@@ -19,7 +19,7 @@ use datafusion::prelude::*;
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::exec::PromqlExtensionPlanner;
-use crate::plan::{plan_expr, EvalParams};
+use crate::plan::{EvalParams, plan_expr};
 use crate::types::{InstantSample, Labels, QueryResult, RangeSamples, TimeRange};
 
 /// Custom query planner that delegates to DefaultPhysicalPlanner with our
@@ -34,9 +34,8 @@ impl datafusion::execution::context::QueryPlanner for PromqlQueryPlanner {
         logical_plan: &datafusion::logical_expr::LogicalPlan,
         session_state: &datafusion::execution::SessionState,
     ) -> datafusion::common::Result<Arc<dyn datafusion::physical_plan::ExecutionPlan>> {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            PromqlExtensionPlanner,
-        )]);
+        let planner =
+            DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(PromqlExtensionPlanner)]);
         planner
             .create_physical_plan(logical_plan, session_state)
             .await
@@ -69,8 +68,7 @@ impl PromqlEngine {
         query: &str,
         timestamp: DateTime<Utc>,
     ) -> Result<QueryResult> {
-        let expr = promql_parser::parser::parse(query)
-            .map_err(PromqlError::Parse)?;
+        let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
 
         let ts_ms = timestamp.timestamp_millis();
         let time_range = TimeRange {
@@ -100,8 +98,7 @@ impl PromqlEngine {
         end: DateTime<Utc>,
         step: std::time::Duration,
     ) -> Result<QueryResult> {
-        let expr = promql_parser::parser::parse(query)
-            .map_err(PromqlError::Parse)?;
+        let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
 
         let start_ms = start.timestamp_millis();
         let end_ms = end.timestamp_millis();
@@ -167,20 +164,16 @@ fn batches_to_matrix(batches: &[arrow::record_batch::RecordBatch]) -> Result<Que
 
 /// Extract labels and sample data from a batch for a given row.
 fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(i64, f64, Labels)> {
-    let ts_col = batch
-        .column_by_name("timestamp")
-        .ok_or_else(|| {
-            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
-                "missing timestamp column".into(),
-            ))
-        })?;
-    let val_col = batch
-        .column_by_name("value")
-        .ok_or_else(|| {
-            PromqlError::Execution(datafusion::error::DataFusionError::Internal(
-                "missing value column".into(),
-            ))
-        })?;
+    let ts_col = batch.column_by_name("timestamp").ok_or_else(|| {
+        PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+            "missing timestamp column".into(),
+        ))
+    })?;
+    let val_col = batch.column_by_name("value").ok_or_else(|| {
+        PromqlError::Execution(datafusion::error::DataFusionError::Internal(
+            "missing value column".into(),
+        ))
+    })?;
 
     let ts_arr = ts_col
         .as_any()

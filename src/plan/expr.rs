@@ -7,7 +7,7 @@ use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::lookup_range_function;
 use crate::node::{InstantVectorEval, RangeVectorEval};
-use crate::types::{TimeRange, DEFAULT_LOOKBACK_MS};
+use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
 
 use super::selector::plan_vector_selector;
 
@@ -52,9 +52,7 @@ pub(crate) async fn plan_expr(
             }))
         }
 
-        Expr::Call(call) => {
-            plan_call(call, source, time_range, params).await
-        }
+        Expr::Call(call) => plan_call(call, source, time_range, params).await,
 
         Expr::MatrixSelector(_) => Err(PromqlError::Plan(
             "bare matrix selector is not allowed as a top-level expression; \
@@ -66,9 +64,7 @@ pub(crate) async fn plan_expr(
             "scalar/string literals as top-level query not yet implemented".into(),
         )),
 
-        Expr::Paren(paren) => {
-            Box::pin(plan_expr(&paren.expr, source, time_range, params)).await
-        }
+        Expr::Paren(paren) => Box::pin(plan_expr(&paren.expr, source, time_range, params)).await,
 
         _ => Err(PromqlError::NotImplemented(format!(
             "expression type not yet supported: {expr:?}"

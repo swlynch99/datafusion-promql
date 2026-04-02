@@ -104,8 +104,5 @@ pub trait MetricSource: Send + Sync {
     ) -> Result<(Arc<dyn TableProvider>, TableFormat)>;
 
     /// List available metrics (used for `{__name__=~"pattern"}` selectors).
-    async fn list_metrics(
-        &self,
-        name_matcher: Option<&Matcher>,
-    ) -> Result<Vec<MetricMeta>>;
+    async fn list_metrics(&self, name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>>;
 }

@@ -9,10 +9,10 @@ use chrono::TimeZone;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 
+use datafusion_promql::PromqlEngine;
 use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
 use datafusion_promql::error::Result;
 use datafusion_promql::types::{QueryResult, TimeRange};
-use datafusion_promql::PromqlEngine;
 
 /// In-memory metric source for testing range queries.
 struct InMemoryMetricSource {
@@ -39,10 +39,7 @@ impl MetricSource for InMemoryMetricSource {
         Ok((Arc::new(table), TableFormat::Long))
     }
 
-    async fn list_metrics(
-        &self,
-        _name_matcher: Option<&Matcher>,
-    ) -> Result<Vec<MetricMeta>> {
+    async fn list_metrics(&self, _name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>> {
         Ok(vec![])
     }
 }
@@ -109,7 +106,9 @@ fn make_gauge_source() -> InMemoryMetricSource {
         Field::new("sensor", DataType::Utf8, false),
     ]));
 
-    let gauge_values = vec![20.0, 22.0, 25.0, 23.0, 21.0, 24.0, 26.0, 28.0, 27.0, 25.0, 23.0];
+    let gauge_values = vec![
+        20.0, 22.0, 25.0, 23.0, 21.0, 24.0, 26.0, 28.0, 27.0, 25.0, 23.0,
+    ];
     let n = gauge_values.len();
 
     let mut names = Vec::with_capacity(n);
@@ -158,9 +157,7 @@ async fn test_instant_query_rate() {
         QueryResult::Vector(samples) => {
             assert_eq!(samples.len(), 2, "expected 2 series");
             let mut samples = samples;
-            samples.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: rate = 10.0/s
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
@@ -205,9 +202,7 @@ async fn test_range_query_rate() {
         QueryResult::Matrix(series) => {
             assert_eq!(series.len(), 2, "expected 2 series");
             let mut series = series;
-            series.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            series.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: rate should be 10.0 at both steps
             assert_eq!(series[0].labels.get("instance").unwrap(), "host1");
@@ -253,9 +248,7 @@ async fn test_instant_query_irate() {
         QueryResult::Vector(samples) => {
             assert_eq!(samples.len(), 2, "expected 2 series");
             let mut samples = samples;
-            samples.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: irate = 10.0/s
             assert!(
@@ -298,9 +291,7 @@ async fn test_range_query_increase() {
         QueryResult::Matrix(series) => {
             assert_eq!(series.len(), 2, "expected 2 series");
             let mut series = series;
-            series.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            series.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: increase should be 50 at both steps
             assert_eq!(series[0].labels.get("instance").unwrap(), "host1");
@@ -414,9 +405,7 @@ async fn test_range_query_plain_selector() {
         QueryResult::Matrix(series) => {
             assert_eq!(series.len(), 2, "expected 2 series");
             let mut series = series;
-            series.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            series.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: steps at 0, 2000, 4000 -> values 0, 20, 40
             assert_eq!(series[0].labels.get("instance").unwrap(), "host1");
@@ -498,9 +487,7 @@ async fn test_bare_matrix_selector_error() {
     let engine = PromqlEngine::new(Arc::new(source));
 
     let ts = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
-    let result = engine
-        .instant_query("http_requests_total[5s]", ts)
-        .await;
+    let result = engine.instant_query("http_requests_total[5s]", ts).await;
 
     assert!(result.is_err(), "bare matrix selector should be an error");
 }

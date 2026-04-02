@@ -10,9 +10,7 @@ use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 /// Physical plan node that aligns raw samples to evaluation timestamps
 /// using the lookback window.
@@ -147,9 +145,7 @@ impl ExecutionPlan for InstantVectorExec {
                 let ts_col = batch
                     .column_by_name("timestamp")
                     .expect("missing timestamp column");
-                let val_col = batch
-                    .column_by_name("value")
-                    .expect("missing value column");
+                let val_col = batch.column_by_name("value").expect("missing value column");
 
                 let ts_arr = ts_col
                     .as_any()
@@ -164,9 +160,9 @@ impl ExecutionPlan for InstantVectorExec {
                 let label_arrays: Vec<&arrow::array::StringArray> = label_columns
                     .iter()
                     .map(|name| {
-                        let col = batch.column_by_name(name).unwrap_or_else(|| {
-                            panic!("missing label column: {name}")
-                        });
+                        let col = batch
+                            .column_by_name(name)
+                            .unwrap_or_else(|| panic!("missing label column: {name}"));
                         col.as_any()
                             .downcast_ref::<arrow::array::StringArray>()
                             .unwrap_or_else(|| panic!("label column {name} must be Utf8"))

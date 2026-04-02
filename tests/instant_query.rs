@@ -8,12 +8,10 @@ use chrono::TimeZone;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 
-use datafusion_promql::datasource::{
-    Matcher, MetricMeta, MetricSource, TableFormat,
-};
+use datafusion_promql::PromqlEngine;
+use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
 use datafusion_promql::error::Result;
 use datafusion_promql::types::{QueryResult, TimeRange};
-use datafusion_promql::PromqlEngine;
 
 /// A simple in-memory metric source for testing.
 struct InMemoryMetricSource {
@@ -35,18 +33,12 @@ impl MetricSource for InMemoryMetricSource {
         _matchers: &[Matcher],
         _time_range: TimeRange,
     ) -> Result<(Arc<dyn TableProvider>, TableFormat)> {
-        let table = MemTable::try_new(
-            Arc::clone(&self.schema),
-            vec![self.batches.clone()],
-        )
-        .map_err(|e| datafusion_promql::error::PromqlError::DataSource(e.to_string()))?;
+        let table = MemTable::try_new(Arc::clone(&self.schema), vec![self.batches.clone()])
+            .map_err(|e| datafusion_promql::error::PromqlError::DataSource(e.to_string()))?;
         Ok((Arc::new(table), TableFormat::Long))
     }
 
-    async fn list_metrics(
-        &self,
-        _name_matcher: Option<&Matcher>,
-    ) -> Result<Vec<MetricMeta>> {
+    async fn list_metrics(&self, _name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>> {
         Ok(vec![MetricMeta {
             name: "cpu_usage".into(),
             label_names: vec!["instance".into(), "job".into()],
@@ -70,8 +62,14 @@ fn make_test_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec![
-                "cpu_usage", "cpu_usage", "cpu_usage", "cpu_usage",
-                "cpu_usage", "cpu_usage", "cpu_usage", "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
             ])),
             Arc::new(Int64Array::from(vec![
                 // Series 1: instance=host1 at t=1000, 2000, 3000, 4000
@@ -81,17 +79,21 @@ fn make_test_source() -> InMemoryMetricSource {
             ])),
             Arc::new(Float64Array::from(vec![
                 // Series 1 values
-                10.0, 20.0, 30.0, 40.0,
-                // Series 2 values
+                10.0, 20.0, 30.0, 40.0, // Series 2 values
                 50.0, 60.0, 70.0, 80.0,
             ])),
             Arc::new(StringArray::from(vec![
-                "host1", "host1", "host1", "host1",
-                "host2", "host2", "host2", "host2",
+                "host1", "host1", "host1", "host1", "host2", "host2", "host2", "host2",
             ])),
             Arc::new(StringArray::from(vec![
-                "node_exporter", "node_exporter", "node_exporter", "node_exporter",
-                "node_exporter", "node_exporter", "node_exporter", "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
+                "node_exporter",
             ])),
         ],
     )
@@ -115,9 +117,7 @@ async fn test_instant_query_basic() {
 
             // Sort by instance label for deterministic assertion.
             let mut samples = samples;
-            samples.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1 at eval_ts=3000 should have value 30.0 (exact match at t=3000).
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
@@ -148,9 +148,7 @@ async fn test_instant_query_lookback_window() {
             assert_eq!(samples.len(), 2, "expected 2 series");
 
             let mut samples = samples;
-            samples.sort_by(|a, b| {
-                a.labels.get("instance").cmp(&b.labels.get("instance"))
-            });
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             // host1: most recent sample before 3500 is at t=3000, value 30.0.
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
