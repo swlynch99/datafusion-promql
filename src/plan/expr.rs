@@ -1,12 +1,16 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::logical_expr::{Extension, LogicalPlan};
-use promql_parser::parser::Expr;
+use promql_parser::parser::{self, Expr, LabelModifier};
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
-use crate::func::lookup_range_function;
-use crate::node::{InstantVectorEval, RangeVectorEval};
+use crate::func::{lookup_aggregate_function, lookup_range_function};
+use crate::node::{
+    AggregateEval, BinaryEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
+    ScalarBinaryEval, VectorMatching, convert_binary_op,
+};
 use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
 
 use super::selector::plan_vector_selector;
@@ -20,6 +24,16 @@ pub(crate) struct EvalParams {
     pub start_ms: i64,
     pub end_ms: i64,
     pub step_ms: i64,
+}
+
+/// Extract label column names from a schema (everything except timestamp/value).
+fn label_columns_from_schema(schema: &datafusion::common::DFSchemaRef) -> Vec<String> {
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .filter(|n| n != "timestamp" && n != "value")
+        .collect()
 }
 
 /// Translate a promql-parser AST `Expr` into a DataFusion `LogicalPlan`.
@@ -66,6 +80,12 @@ pub(crate) async fn plan_expr(
 
         Expr::Paren(paren) => Box::pin(plan_expr(&paren.expr, source, time_range, params)).await,
 
+        Expr::Aggregate(agg) => plan_aggregate(agg, source, time_range, params).await,
+
+        Expr::Binary(bin) => plan_binary(bin, source, time_range, params).await,
+
+        Expr::Unary(unary) => plan_unary(unary, source, time_range, params).await,
+
         _ => Err(PromqlError::NotImplemented(format!(
             "expression type not yet supported: {expr:?}"
         ))),
@@ -74,7 +94,7 @@ pub(crate) async fn plan_expr(
 
 /// Plan a function call expression.
 async fn plan_call(
-    call: &promql_parser::parser::Call,
+    call: &parser::Call,
     source: &dyn MetricSource,
     time_range: TimeRange,
     params: EvalParams,
@@ -130,4 +150,175 @@ async fn plan_call(
             "function not yet supported: {func_name}"
         )))
     }
+}
+
+/// Plan an aggregation expression (sum, avg, count, min, max).
+async fn plan_aggregate(
+    agg: &parser::AggregateExpr,
+    source: &dyn MetricSource,
+    time_range: TimeRange,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    let func = lookup_aggregate_function(agg.op)?;
+
+    // Recursively plan the inner expression.
+    let child_plan = Box::pin(plan_expr(&agg.expr, source, time_range, params)).await?;
+
+    // Determine grouping labels from the modifier and child schema.
+    let child_label_cols = label_columns_from_schema(child_plan.schema());
+    let grouping_labels = compute_grouping_labels(&agg.modifier, &child_label_cols);
+
+    let node = AggregateEval::new(child_plan, func, grouping_labels)?;
+
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(node),
+    }))
+}
+
+/// Compute grouping labels from a LabelModifier and the available child label columns.
+fn compute_grouping_labels(
+    modifier: &Option<LabelModifier>,
+    child_label_cols: &[String],
+) -> Vec<String> {
+    match modifier {
+        Some(LabelModifier::Include(labels)) => {
+            // by(...): keep only specified labels that exist in the child schema.
+            // Exclude __name__ from grouping by default.
+            labels
+                .labels
+                .iter()
+                .filter(|l| child_label_cols.contains(l) && l.as_str() != "__name__")
+                .cloned()
+                .collect()
+        }
+        Some(LabelModifier::Exclude(labels)) => {
+            // without(...): keep all child labels except specified ones and __name__.
+            let exclude: HashSet<&str> = labels.labels.iter().map(|s| s.as_str()).collect();
+            child_label_cols
+                .iter()
+                .filter(|l| !exclude.contains(l.as_str()) && l.as_str() != "__name__")
+                .cloned()
+                .collect()
+        }
+        None => {
+            // No modifier: aggregate all into one group (no grouping labels).
+            vec![]
+        }
+    }
+}
+
+/// Plan a binary expression.
+async fn plan_binary(
+    bin: &parser::BinaryExpr,
+    source: &dyn MetricSource,
+    time_range: TimeRange,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    let op = convert_binary_op(bin.op)?;
+
+    let lhs_is_scalar = matches!(bin.lhs.as_ref(), Expr::NumberLiteral(_));
+    let rhs_is_scalar = matches!(bin.rhs.as_ref(), Expr::NumberLiteral(_));
+
+    let return_bool = bin
+        .modifier
+        .as_ref()
+        .map(|m| m.return_bool)
+        .unwrap_or(false);
+
+    match (lhs_is_scalar, rhs_is_scalar) {
+        (true, true) => {
+            // scalar op scalar: not yet implemented
+            Err(PromqlError::NotImplemented(
+                "scalar op scalar not yet supported".into(),
+            ))
+        }
+        (true, false) => {
+            // scalar op vector
+            let scalar_val = extract_scalar(&bin.lhs)?;
+            let rhs_plan = Box::pin(plan_expr(&bin.rhs, source, time_range, params)).await?;
+            let node = ScalarBinaryEval::new(rhs_plan, scalar_val, op, true, return_bool)?;
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(node),
+            }))
+        }
+        (false, true) => {
+            // vector op scalar
+            let scalar_val = extract_scalar(&bin.rhs)?;
+            let lhs_plan = Box::pin(plan_expr(&bin.lhs, source, time_range, params)).await?;
+            let node = ScalarBinaryEval::new(lhs_plan, scalar_val, op, false, return_bool)?;
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(node),
+            }))
+        }
+        (false, false) => {
+            // vector op vector
+            let lhs_plan = Box::pin(plan_expr(&bin.lhs, source, time_range, params)).await?;
+            let rhs_plan = Box::pin(plan_expr(&bin.rhs, source, time_range, params)).await?;
+
+            let matching = extract_vector_matching(bin)?;
+            let node = BinaryEval::new(lhs_plan, rhs_plan, op, return_bool, matching)?;
+
+            Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(node),
+            }))
+        }
+    }
+}
+
+/// Extract the scalar value from a NumberLiteral expression.
+fn extract_scalar(expr: &Expr) -> Result<f64> {
+    match expr {
+        Expr::NumberLiteral(lit) => Ok(lit.val),
+        _ => Err(PromqlError::Plan(
+            "expected a number literal for scalar operand".into(),
+        )),
+    }
+}
+
+/// Extract VectorMatching from a BinaryExpr's modifier.
+fn extract_vector_matching(bin: &parser::BinaryExpr) -> Result<VectorMatching> {
+    let modifier = match &bin.modifier {
+        Some(m) => m,
+        None => return Ok(VectorMatching::default_matching()),
+    };
+
+    let card = match &modifier.card {
+        parser::VectorMatchCardinality::OneToOne => MatchCardinality::OneToOne,
+        parser::VectorMatchCardinality::ManyToOne(labels) => {
+            MatchCardinality::ManyToOne(labels.labels.clone())
+        }
+        parser::VectorMatchCardinality::OneToMany(labels) => {
+            MatchCardinality::OneToMany(labels.labels.clone())
+        }
+        parser::VectorMatchCardinality::ManyToMany => MatchCardinality::OneToOne,
+    };
+
+    let (on_labels, ignoring_labels) = match &modifier.matching {
+        Some(LabelModifier::Include(labels)) => (Some(labels.labels.clone()), None),
+        Some(LabelModifier::Exclude(labels)) => (None, Some(labels.labels.clone())),
+        None => (None, None),
+    };
+
+    Ok(VectorMatching {
+        card,
+        on_labels,
+        ignoring_labels,
+    })
+}
+
+/// Plan a unary expression (negation).
+async fn plan_unary(
+    unary: &parser::UnaryExpr,
+    source: &dyn MetricSource,
+    time_range: TimeRange,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    // Unary negation: multiply by -1
+    let child_plan = Box::pin(plan_expr(&unary.expr, source, time_range, params)).await?;
+
+    use crate::node::BinaryOp;
+    let node = ScalarBinaryEval::new(child_plan, -1.0, BinaryOp::Mul, true, false)?;
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(node),
+    }))
 }
