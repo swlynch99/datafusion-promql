@@ -4,8 +4,12 @@ pub mod types;
 
 pub mod exec;
 mod func;
+mod normalize;
 mod node;
 pub mod plan;
+
+#[cfg(feature = "parquet")]
+pub mod parquet;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
