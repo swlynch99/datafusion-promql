@@ -7,6 +7,10 @@ use datafusion::catalog::TableProvider;
 use crate::error::Result;
 use crate::types::{Labels, TimeRange};
 
+/// Parser function that converts a column name into `(metric_name, labels)`.
+/// Returns `None` if the column should be skipped.
+pub type ColumnParser = Arc<dyn Fn(&str) -> Option<(String, Labels)> + Send + Sync>;
+
 /// Describes the format of the table returned by a [`MetricSource`].
 #[derive(Debug, Clone)]
 pub enum TableFormat {
@@ -32,7 +36,7 @@ pub struct ColumnMapping {
     pub ignore_columns: Vec<String>,
     /// A function that parses a column name into `(metric_name, labels)`.
     /// Returns `None` if the column should be skipped.
-    pub parse_column: Arc<dyn Fn(&str) -> Option<(String, Labels)> + Send + Sync>,
+    pub parse_column: ColumnParser,
 }
 
 impl std::fmt::Debug for ColumnMapping {
@@ -100,8 +104,5 @@ pub trait MetricSource: Send + Sync {
     ) -> Result<(Arc<dyn TableProvider>, TableFormat)>;
 
     /// List available metrics (used for `{__name__=~"pattern"}` selectors).
-    async fn list_metrics(
-        &self,
-        name_matcher: Option<&Matcher>,
-    ) -> Result<Vec<MetricMeta>>;
+    async fn list_metrics(&self, name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>>;
 }

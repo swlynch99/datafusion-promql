@@ -12,34 +12,33 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-/// Physical plan node that aligns raw samples to evaluation timestamps
-/// using the lookback window.
-///
-/// For each series (grouped by label columns), picks the most recent sample
-/// within `[eval_ts - lookback, eval_ts]`.
+use crate::func::RangeFunction;
+
+/// Physical plan node that applies a range vector function over a sliding
+/// window of samples at each evaluation timestamp.
 #[derive(Debug)]
-pub(crate) struct InstantVectorExec {
+pub(crate) struct RangeVectorExec {
     child: Arc<dyn ExecutionPlan>,
+    range_ms: i64,
+    func: RangeFunction,
     eval_ts_ms: Option<i64>,
-    #[allow(dead_code)]
     start_ms: i64,
-    #[allow(dead_code)]
     end_ms: i64,
-    #[allow(dead_code)]
     step_ms: i64,
-    lookback_ms: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
 }
 
-impl InstantVectorExec {
+impl RangeVectorExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
+        range_ms: i64,
+        func: RangeFunction,
         eval_ts_ms: Option<i64>,
         start_ms: i64,
         end_ms: i64,
         step_ms: i64,
-        lookback_ms: i64,
         label_columns: Vec<String>,
     ) -> Self {
         let schema = child.schema();
@@ -51,17 +50,17 @@ impl InstantVectorExec {
         ));
         Self {
             child,
+            range_ms,
+            func,
             eval_ts_ms,
             start_ms,
             end_ms,
             step_ms,
-            lookback_ms,
             label_columns,
             properties,
         }
     }
 
-    /// Generate the list of evaluation timestamps.
     fn eval_timestamps(&self) -> Vec<i64> {
         if let Some(ts) = self.eval_ts_ms {
             return vec![ts];
@@ -76,15 +75,19 @@ impl InstantVectorExec {
     }
 }
 
-impl DisplayAs for InstantVectorExec {
+impl DisplayAs for RangeVectorExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantVectorExec")
+        write!(
+            f,
+            "RangeVectorExec: func={}, range={}ms",
+            self.func, self.range_ms
+        )
     }
 }
 
-impl ExecutionPlan for InstantVectorExec {
+impl ExecutionPlan for RangeVectorExec {
     fn name(&self) -> &str {
-        "InstantVectorExec"
+        "RangeVectorExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -109,11 +112,12 @@ impl ExecutionPlan for InstantVectorExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
+            self.range_ms,
+            self.func,
             self.eval_ts_ms,
             self.start_ms,
             self.end_ms,
             self.step_ms,
-            self.lookback_ms,
             self.label_columns.clone(),
         )))
     }
@@ -126,12 +130,14 @@ impl ExecutionPlan for InstantVectorExec {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let schema = self.schema();
         let eval_timestamps = self.eval_timestamps();
-        let lookback_ms = self.lookback_ms;
+        let range_ms = self.range_ms;
+        let func = self.func;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
-            // Collect all batches from the child stream.
             use futures::StreamExt;
+
+            // Collect all batches from the child stream.
             let mut batches = Vec::new();
             let mut stream = child_stream;
             while let Some(batch_result) = stream.next().await {
@@ -156,7 +162,6 @@ impl ExecutionPlan for InstantVectorExec {
                     .downcast_ref::<arrow::array::Float64Array>()
                     .expect("value must be Float64");
 
-                // Get label column arrays.
                 let label_arrays: Vec<&arrow::array::StringArray> = label_columns
                     .iter()
                     .map(|name| {
@@ -185,30 +190,27 @@ impl ExecutionPlan for InstantVectorExec {
                 samples.sort_by_key(|(ts, _)| *ts);
             }
 
-            // For each eval timestamp and each series, find the most recent
-            // sample within [eval_ts - lookback, eval_ts].
+            // For each eval timestamp and each series, collect samples in
+            // [t - range_ms, t] and apply the range function.
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                let window_start = eval_ts - lookback_ms;
+                let window_start = eval_ts - range_ms;
                 for (key, samples) in &series_map {
-                    // Binary search for the last sample <= eval_ts.
-                    let pos = samples.partition_point(|(ts, _)| *ts <= eval_ts);
-                    if pos == 0 {
-                        continue; // No sample at or before eval_ts.
-                    }
-                    let (sample_ts, sample_val) = samples[pos - 1];
-                    if sample_ts < window_start {
-                        continue; // Sample is outside the lookback window.
-                    }
+                    // Find samples within [window_start, eval_ts].
+                    let start_idx = samples.partition_point(|(ts, _)| *ts < window_start);
+                    let end_idx = samples.partition_point(|(ts, _)| *ts <= eval_ts);
 
-                    out_ts.append_value(eval_ts);
-                    out_val.append_value(sample_val);
-                    for (i, label_val) in key.iter().enumerate() {
-                        out_labels[i].append_value(label_val);
+                    let window = &samples[start_idx..end_idx];
+                    if let Some(value) = func.evaluate(window) {
+                        out_ts.append_value(eval_ts);
+                        out_val.append_value(value);
+                        for (i, label_val) in key.iter().enumerate() {
+                            out_labels[i].append_value(label_val);
+                        }
                     }
                 }
             }
