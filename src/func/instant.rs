@@ -8,9 +8,10 @@ pub(crate) enum InstantFunction {
     Abs,
     /// Round each sample value up to the nearest integer.
     Ceil,
+    /// Exponential function: e raised to the power of the sample value.
+    Exp,
     /// Round each sample value down to the nearest integer.
     Floor,
-    /// Natural logarithm of each sample value.
     Ln,
     /// Base-2 logarithm of each sample value.
     Log2,
@@ -29,6 +30,7 @@ impl fmt::Display for InstantFunction {
         match self {
             Self::Abs => write!(f, "abs"),
             Self::Ceil => write!(f, "ceil"),
+            Self::Exp => write!(f, "exp"),
             Self::Floor => write!(f, "floor"),
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
@@ -46,6 +48,7 @@ impl InstantFunction {
         match self {
             Self::Abs => value.abs(),
             Self::Ceil => value.ceil(),
+            Self::Exp => value.exp(),
             Self::Floor => value.floor(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
@@ -81,6 +84,7 @@ impl PartialEq for InstantFunction {
         match (self, other) {
             (Self::Abs, Self::Abs) => true,
             (Self::Ceil, Self::Ceil) => true,
+            (Self::Exp, Self::Exp) => true,
             (Self::Floor, Self::Floor) => true,
             (Self::Ln, Self::Ln) => true,
             (Self::Log2, Self::Log2) => true,
@@ -102,6 +106,7 @@ impl Hash for InstantFunction {
         match self {
             Self::Abs
             | Self::Ceil
+            | Self::Exp
             | Self::Floor
             | Self::Ln
             | Self::Log2
@@ -121,6 +126,7 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
     match name {
         "abs" => Some(InstantFunction::Abs),
         "ceil" => Some(InstantFunction::Ceil),
+        "exp" => Some(InstantFunction::Exp),
         "floor" => Some(InstantFunction::Floor),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
@@ -233,6 +239,68 @@ mod tests {
         assert!(matches!(
             lookup_instant_function("ceil", &[]),
             Some(InstantFunction::Ceil)
+        ));
+    }
+
+    // --- exp tests ---
+
+    #[test]
+    fn test_exp_zero() {
+        // e^0 = 1
+        let result = InstantFunction::Exp.evaluate(0.0);
+        assert!(
+            (result - 1.0).abs() < f64::EPSILON,
+            "expected 1.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_exp_one() {
+        // e^1 = e
+        let result = InstantFunction::Exp.evaluate(1.0);
+        assert!(
+            (result - std::f64::consts::E).abs() < 1e-10,
+            "expected e, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_exp_negative() {
+        // e^-1 = 1/e
+        let result = InstantFunction::Exp.evaluate(-1.0);
+        let expected = 1.0 / std::f64::consts::E;
+        assert!(
+            (result - expected).abs() < 1e-10,
+            "expected {expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_exp_large_positive() {
+        // e^10
+        let result = InstantFunction::Exp.evaluate(10.0);
+        let expected = 10.0_f64.exp();
+        assert!(
+            (result - expected).abs() < 1e-6,
+            "expected {expected}, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_exp_large_negative() {
+        // e^-100 should be very close to 0
+        let result = InstantFunction::Exp.evaluate(-100.0);
+        assert!(
+            result >= 0.0 && result < 1e-40,
+            "expected near 0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_lookup_exp() {
+        assert!(matches!(
+            lookup_instant_function("exp", &[]),
+            Some(InstantFunction::Exp)
         ));
     }
 
