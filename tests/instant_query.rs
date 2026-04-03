@@ -255,6 +255,42 @@ async fn test_ln_instant_query() {
 }
 
 #[tokio::test]
+async fn test_instant_query_exp() {
+    let source = make_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // exp(cpu_usage) at t=3000: values are 30.0 and 70.0, so results are e^30 and e^70.
+    let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let result = engine.instant_query("exp(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            assert_eq!(samples[0].timestamp_ms, 3000);
+            let expected_host1 = 30.0_f64.exp();
+            assert!(
+                (samples[0].value - expected_host1).abs() < 1e-6,
+                "expected e^30={expected_host1}, got {}",
+                samples[0].value
+            );
+
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
+            assert_eq!(samples[1].timestamp_ms, 3000);
+            let expected_host2 = 70.0_f64.exp();
+            // Use relative comparison for large values
+            assert!(
+                ((samples[1].value - expected_host2) / expected_host2).abs() < 1e-10,
+                "relative error too large for e^70"
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_floor_instant_query() {
     // Source with fractional values to exercise floor rounding.
     let schema = Arc::new(Schema::new(vec![
