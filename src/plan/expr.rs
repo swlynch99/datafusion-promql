@@ -8,8 +8,8 @@ use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{lookup_aggregate_function, lookup_instant_function, lookup_range_function};
 use crate::node::{
-    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
-    ScalarBinaryEval, VectorMatching, convert_binary_op,
+    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality,
+    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
 
@@ -169,8 +169,7 @@ async fn plan_call(
                 )));
             }
             let vector_arg = &call.args.args[0];
-            let child_plan =
-                Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
             let node = InstantFuncEval::new(child_plan, func);
             return Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),

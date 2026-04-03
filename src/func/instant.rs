@@ -60,16 +60,19 @@ mod tests {
         assert!((f.evaluate(2.3) - 2.0).abs() < f64::EPSILON, "2.3 -> 2");
         assert!((f.evaluate(2.5) - 3.0).abs() < f64::EPSILON, "2.5 -> 3");
         assert!((f.evaluate(2.7) - 3.0).abs() < f64::EPSILON, "2.7 -> 3");
-        assert!((f.evaluate(-1.5) - (-1.0)).abs() < f64::EPSILON, "-1.5 -> -1");
+        assert!(
+            (f.evaluate(-1.5) - (-1.0)).abs() < f64::EPSILON,
+            "-1.5 -> -1"
+        );
         assert!((f.evaluate(0.0) - 0.0).abs() < f64::EPSILON, "0 -> 0");
     }
 
     #[test]
     fn test_round_to_nearest_point_one() {
         let f = InstantFunction::Round { to_nearest: 0.1 };
-        // 3.14159 -> 3.1 (rounds to nearest 0.1)
-        let result = f.evaluate(3.14159);
-        assert!((result - 3.1).abs() < 1e-10, "expected 3.1, got {result}");
+        // 1.24 -> 1.2 (rounds to nearest 0.1)
+        let result = f.evaluate(1.24);
+        assert!((result - 1.2).abs() < 1e-10, "expected 1.2, got {result}");
     }
 
     #[test]
@@ -91,9 +94,15 @@ mod tests {
     fn test_round_negative_values() {
         let f = InstantFunction::Round { to_nearest: 1.0 };
         // floor(-2.3 + 0.5) = floor(-1.8) = -2
-        assert!((f.evaluate(-2.3) - (-2.0)).abs() < f64::EPSILON, "-2.3 -> -2");
+        assert!(
+            (f.evaluate(-2.3) - (-2.0)).abs() < f64::EPSILON,
+            "-2.3 -> -2"
+        );
         // floor(-2.7 + 0.5) = floor(-2.2) = -3
-        assert!((f.evaluate(-2.7) - (-3.0)).abs() < f64::EPSILON, "-2.7 -> -3");
+        assert!(
+            (f.evaluate(-2.7) - (-3.0)).abs() < f64::EPSILON,
+            "-2.7 -> -3"
+        );
     }
 
     #[test]

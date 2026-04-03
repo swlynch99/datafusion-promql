@@ -159,6 +159,9 @@ impl ExecutionPlan for InstantFuncExec {
             Ok(batch)
         });
 
-        Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema(), stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            stream,
+        )))
     }
 }
