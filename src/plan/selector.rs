@@ -106,7 +106,10 @@ pub(crate) async fn plan_vector_selector(
     // Expand the time range to include the lookback window (and any extra
     // range duration for range vectors) so downstream nodes have enough data.
     let expanded_range = TimeRange {
-        start_ms: time_range.start_ms - crate::types::DEFAULT_LOOKBACK_MS - extra_range_ms,
+        start_ms: time_range
+            .start_ms
+            .saturating_sub(crate::types::DEFAULT_LOOKBACK_MS)
+            .saturating_sub(extra_range_ms),
         end_ms: time_range.end_ms,
     };
 
