@@ -265,6 +265,48 @@ async fn test_floor_instant_query() {
 }
 
 #[tokio::test]
+async fn test_sqrt_instant_query() {
+    let source = make_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // sqrt(cpu_usage) at t=4000: host1=40.0 -> sqrt(40.0), host2=80.0 -> sqrt(80.0)
+    let ts = chrono::Utc.timestamp_millis_opt(4000).unwrap();
+    let result = engine.instant_query("sqrt(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            // __name__ should be dropped
+            assert!(
+                !samples[0].labels.contains_key("__name__"),
+                "sqrt() should drop __name__"
+            );
+
+            // host1: sqrt(40.0)
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            let expected_host1 = 40.0f64.sqrt();
+            assert!(
+                (samples[0].value - expected_host1).abs() < 1e-10,
+                "expected sqrt(40)={expected_host1}, got {}",
+                samples[0].value
+            );
+
+            // host2: sqrt(80.0)
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
+            let expected_host2 = 80.0f64.sqrt();
+            assert!(
+                (samples[1].value - expected_host2).abs() < 1e-10,
+                "expected sqrt(80)={expected_host2}, got {}",
+                samples[1].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_instant_query_with_label_filter() {
     let source = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
