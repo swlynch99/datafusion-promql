@@ -43,6 +43,14 @@ impl InstantFunction {
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
         }
     }
+
+    /// Whether this function drops the `__name__` label from its output.
+    ///
+    /// All math instant functions drop the metric name because the result is
+    /// a different quantity from the input.
+    pub fn drops_metric_name(&self) -> bool {
+        true
+    }
 }
 
 // f64 doesn't implement Eq/Hash, so we implement them manually using bit representation.
