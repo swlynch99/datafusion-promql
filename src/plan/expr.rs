@@ -170,7 +170,7 @@ async fn plan_call(
             }
             let vector_arg = &call.args.args[0];
             let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
-            let node = InstantFuncEval::new(child_plan, func);
+            let node = InstantFuncEval::new(child_plan, func)?;
             return Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),
             }));

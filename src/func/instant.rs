@@ -3,6 +3,8 @@ use std::fmt;
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum InstantFunction {
+    /// Natural logarithm of each sample value.
+    Ln,
     /// Base-2 logarithm of each sample value.
     Log2,
     /// Round each value to the nearest multiple of `to_nearest`.
@@ -13,15 +15,25 @@ impl InstantFunction {
     /// Apply the function to a single sample value.
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
+            Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
         }
+    }
+
+    /// Whether this function drops the `__name__` label from its output.
+    ///
+    /// All math instant functions drop the metric name because the result is
+    /// a different quantity from the input.
+    pub fn drops_metric_name(&self) -> bool {
+        true
     }
 }
 
 impl fmt::Display for InstantFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
         }
@@ -34,6 +46,7 @@ impl fmt::Display for InstantFunction {
 /// Returns `None` if the name is not a known instant function.
 pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<InstantFunction> {
     match name {
+        "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
         "round" => {
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
@@ -58,6 +71,63 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ln_positive() {
+        let result = InstantFunction::Ln.evaluate(1.0);
+        assert!(result.abs() < f64::EPSILON, "ln(1) should be 0, got {result}");
+    }
+
+    #[test]
+    fn test_ln_e() {
+        let result = InstantFunction::Ln.evaluate(std::f64::consts::E);
+        assert!(
+            (result - 1.0).abs() < f64::EPSILON,
+            "ln(e) should be 1, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_ln_zero() {
+        let result = InstantFunction::Ln.evaluate(0.0);
+        assert!(
+            result.is_infinite() && result.is_sign_negative(),
+            "ln(0) should be -Inf, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_ln_negative() {
+        let result = InstantFunction::Ln.evaluate(-1.0);
+        assert!(result.is_nan(), "ln(-1) should be NaN, got {result}");
+    }
+
+    #[test]
+    fn test_ln_infinity() {
+        let result = InstantFunction::Ln.evaluate(f64::INFINITY);
+        assert!(
+            result.is_infinite() && result.is_sign_positive(),
+            "ln(+Inf) should be +Inf, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_ln_lookup() {
+        assert!(matches!(
+            lookup_instant_function("ln", &[]),
+            Some(InstantFunction::Ln)
+        ));
+    }
+
+    #[test]
+    fn test_ln_drops_metric_name() {
+        assert!(InstantFunction::Ln.drops_metric_name());
+    }
+
+    #[test]
+    fn test_ln_display() {
+        assert_eq!(InstantFunction::Ln.to_string(), "ln");
+    }
 
     #[test]
     fn test_log2_power_of_two() {

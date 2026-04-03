@@ -13,21 +13,26 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 
 use crate::func::InstantFunction;
 
-/// Physical plan node for applying an instant vector function to each row.
+/// Physical plan node for instant vector functions (e.g., `ln`, `log2`, `round`).
 ///
-/// Transforms the `value` column by applying the function; all other columns pass through.
+/// Applies `func` to the `value` column of each row from the child plan,
+/// forwarding timestamps and label columns unchanged.
 #[derive(Debug)]
 pub(crate) struct InstantFuncExec {
     child: Arc<dyn ExecutionPlan>,
     func: InstantFunction,
+    output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
 }
 
 impl InstantFuncExec {
-    pub fn new(child: Arc<dyn ExecutionPlan>, func: InstantFunction) -> Self {
-        let schema = child.schema();
+    pub fn new(
+        child: Arc<dyn ExecutionPlan>,
+        func: InstantFunction,
+        output_schema: SchemaRef,
+    ) -> Self {
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            EquivalenceProperties::new(Arc::clone(&output_schema)),
             Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
@@ -35,6 +40,7 @@ impl InstantFuncExec {
         Self {
             child,
             func,
+            output_schema,
             properties,
         }
     }
@@ -42,7 +48,7 @@ impl InstantFuncExec {
 
 impl DisplayAs for InstantFuncExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantFuncExec: {}", self.func)
+        write!(f, "InstantFuncExec: func={}", self.func)
     }
 }
 
@@ -56,7 +62,7 @@ impl ExecutionPlan for InstantFuncExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.child.schema()
+        Arc::clone(&self.output_schema)
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -71,7 +77,11 @@ impl ExecutionPlan for InstantFuncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(Arc::clone(&children[0]), self.func)))
+        Ok(Arc::new(Self::new(
+            Arc::clone(&children[0]),
+            self.func,
+            Arc::clone(&self.output_schema),
+        )))
     }
 
     fn execute(
@@ -80,10 +90,11 @@ impl ExecutionPlan for InstantFuncExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
-        let schema = self.schema();
+        let output_schema = Arc::clone(&self.output_schema);
         let func = self.func;
 
-        let label_columns: Vec<String> = schema
+        // Label columns in the output (everything except timestamp/value).
+        let output_labels: Vec<String> = output_schema
             .fields()
             .iter()
             .map(|f| f.name().clone())
@@ -102,7 +113,7 @@ impl ExecutionPlan for InstantFuncExec {
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_label_builders: Vec<StringBuilder> =
-                label_columns.iter().map(|_| StringBuilder::new()).collect();
+                output_labels.iter().map(|_| StringBuilder::new()).collect();
 
             for batch in &batches {
                 let ts_arr = batch
@@ -118,7 +129,7 @@ impl ExecutionPlan for InstantFuncExec {
                     .downcast_ref::<arrow::array::Float64Array>()
                     .expect("value must be Float64");
 
-                let label_arrays: Vec<Option<&arrow::array::StringArray>> = label_columns
+                let label_arrays: Vec<Option<&arrow::array::StringArray>> = output_labels
                     .iter()
                     .map(|name| {
                         batch.column_by_name(name).map(|col| {
@@ -132,9 +143,10 @@ impl ExecutionPlan for InstantFuncExec {
                 for row in 0..batch.num_rows() {
                     let ts = ts_arr.value(row);
                     let val = val_arr.value(row);
+                    let result = func.evaluate(val);
 
                     out_ts.append_value(ts);
-                    out_val.append_value(func.evaluate(val));
+                    out_val.append_value(result);
                     for (i, arr) in label_arrays.iter().enumerate() {
                         let v = arr.map(|a| a.value(row)).unwrap_or("");
                         out_label_builders[i].append_value(v);
@@ -142,20 +154,14 @@ impl ExecutionPlan for InstantFuncExec {
                 }
             }
 
-            // Build output columns in schema field order.
             let mut columns: Vec<arrow::array::ArrayRef> = Vec::new();
-            for field in schema.fields() {
-                let name = field.name().as_str();
-                if name == "timestamp" {
-                    columns.push(Arc::new(out_ts.finish()));
-                } else if name == "value" {
-                    columns.push(Arc::new(out_val.finish()));
-                } else if let Some(idx) = label_columns.iter().position(|n| n == name) {
-                    columns.push(Arc::new(out_label_builders[idx].finish()));
-                }
+            columns.push(Arc::new(out_ts.finish()));
+            columns.push(Arc::new(out_val.finish()));
+            for builder in &mut out_label_builders {
+                columns.push(Arc::new(builder.finish()));
             }
 
-            let batch = RecordBatch::try_new(schema, columns)?;
+            let batch = RecordBatch::try_new(output_schema, columns)?;
             Ok(batch)
         });
 
