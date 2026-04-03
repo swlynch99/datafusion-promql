@@ -8,26 +8,25 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
 use crate::func::InstantFunction;
 
-/// Custom logical node that applies an element-wise instant function to each sample value.
+/// Custom logical node for applying an instant vector function to an instant vector.
 ///
-/// The output schema is identical to the input schema; only the `value` column is transformed.
+/// Transforms the `value` column according to the function, passing all other columns
+/// through unchanged.
 #[derive(Debug, Clone)]
-pub(crate) struct InstantFnEval {
-    /// The child plan producing the instant vector.
+pub(crate) struct InstantFuncEval {
     pub input: LogicalPlan,
-    /// The function to apply to each sample value.
     pub func: InstantFunction,
 }
 
-impl InstantFnEval {
+impl InstantFuncEval {
     pub fn new(input: LogicalPlan, func: InstantFunction) -> Self {
         Self { input, func }
     }
 }
 
-impl UserDefinedLogicalNodeCore for InstantFnEval {
+impl UserDefinedLogicalNodeCore for InstantFuncEval {
     fn name(&self) -> &str {
-        "InstantFnEval"
+        "InstantFuncEval"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -35,7 +34,7 @@ impl UserDefinedLogicalNodeCore for InstantFnEval {
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        // Output schema is the same as the input schema.
+        // Same schema as input: we only transform the value column.
         self.input.schema()
     }
 
@@ -44,7 +43,7 @@ impl UserDefinedLogicalNodeCore for InstantFnEval {
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantFnEval: func={}", self.func)
+        write!(f, "InstantFuncEval: {}", self.func)
     }
 
     fn with_exprs_and_inputs(
@@ -65,26 +64,42 @@ impl UserDefinedLogicalNodeCore for InstantFnEval {
     }
 }
 
-impl PartialEq for InstantFnEval {
+impl PartialEq for InstantFuncEval {
     fn eq(&self, other: &Self) -> bool {
-        self.func == other.func
+        match (self.func, other.func) {
+            (InstantFunction::Log2, InstantFunction::Log2) => true,
+            (
+                InstantFunction::Round { to_nearest: a },
+                InstantFunction::Round { to_nearest: b },
+            ) => a.to_bits() == b.to_bits(),
+            _ => false,
+        }
     }
 }
-impl Eq for InstantFnEval {}
 
-impl Hash for InstantFnEval {
+impl Eq for InstantFuncEval {}
+
+impl Hash for InstantFuncEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.func.hash(state);
+        match self.func {
+            InstantFunction::Log2 => {
+                "log2".hash(state);
+            }
+            InstantFunction::Round { to_nearest } => {
+                "round".hash(state);
+                to_nearest.to_bits().hash(state);
+            }
+        }
     }
 }
 
-impl PartialOrd for InstantFnEval {
+impl PartialOrd for InstantFuncEval {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for InstantFnEval {
+impl Ord for InstantFuncEval {
     fn cmp(&self, _other: &Self) -> Ordering {
         Ordering::Equal
     }

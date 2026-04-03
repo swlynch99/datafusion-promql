@@ -1,13 +1,13 @@
 mod aggregate_eval;
 mod binary_eval;
 mod instant_eval;
-mod instant_fn_eval;
+mod instant_func_eval;
 mod range_eval;
 
 pub(crate) use aggregate_eval::AggregateExec;
 pub(crate) use binary_eval::{BinaryExec, ScalarBinaryExec};
 pub(crate) use instant_eval::InstantVectorExec;
-pub(crate) use instant_fn_eval::InstantFnExec;
+pub(crate) use instant_func_eval::InstantFuncExec;
 pub(crate) use range_eval::RangeVectorExec;
 
 use std::sync::Arc;
@@ -20,7 +20,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::node::{
-    AggregateEval, BinaryEval, InstantFnEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval,
+    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval,
 };
 
 /// Extension planner that converts our custom logical nodes into physical plans.
@@ -88,9 +88,9 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
             return Ok(Some(Arc::new(exec)));
         }
 
-        if let Some(eval) = node.as_any().downcast_ref::<InstantFnEval>() {
+        if let Some(eval) = node.as_any().downcast_ref::<InstantFuncEval>() {
             let child = Arc::clone(&physical_inputs[0]);
-            let exec = InstantFnExec::new(child, eval.func);
+            let exec = InstantFuncExec::new(child, eval.func);
             return Ok(Some(Arc::new(exec)));
         }
 

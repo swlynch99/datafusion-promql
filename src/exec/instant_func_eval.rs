@@ -13,22 +13,21 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 
 use crate::func::InstantFunction;
 
-/// Physical plan node that applies an element-wise instant function to each sample value.
+/// Physical plan node for applying an instant vector function to each row.
 ///
-/// Passes timestamp and all label columns through unchanged; only the `value` column is
-/// transformed by the function.
+/// Transforms the `value` column by applying the function; all other columns pass through.
 #[derive(Debug)]
-pub(crate) struct InstantFnExec {
+pub(crate) struct InstantFuncExec {
     child: Arc<dyn ExecutionPlan>,
     func: InstantFunction,
     properties: Arc<PlanProperties>,
 }
 
-impl InstantFnExec {
+impl InstantFuncExec {
     pub fn new(child: Arc<dyn ExecutionPlan>, func: InstantFunction) -> Self {
         let schema = child.schema();
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&schema)),
+            EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
@@ -41,15 +40,15 @@ impl InstantFnExec {
     }
 }
 
-impl DisplayAs for InstantFnExec {
+impl DisplayAs for InstantFuncExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantFnExec: func={}", self.func)
+        write!(f, "InstantFuncExec: {}", self.func)
     }
 }
 
-impl ExecutionPlan for InstantFnExec {
+impl ExecutionPlan for InstantFuncExec {
     fn name(&self) -> &str {
-        "InstantFnExec"
+        "InstantFuncExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -84,7 +83,6 @@ impl ExecutionPlan for InstantFnExec {
         let schema = self.schema();
         let func = self.func;
 
-        // Collect label column names (everything except timestamp and value).
         let label_columns: Vec<String> = schema
             .fields()
             .iter()
@@ -103,7 +101,7 @@ impl ExecutionPlan for InstantFnExec {
 
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
-            let mut out_labels: Vec<StringBuilder> =
+            let mut out_label_builders: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for batch in &batches {
@@ -120,28 +118,31 @@ impl ExecutionPlan for InstantFnExec {
                     .downcast_ref::<arrow::array::Float64Array>()
                     .expect("value must be Float64");
 
-                let label_arrays: Vec<&arrow::array::StringArray> = label_columns
+                let label_arrays: Vec<Option<&arrow::array::StringArray>> = label_columns
                     .iter()
                     .map(|name| {
-                        batch
-                            .column_by_name(name)
-                            .unwrap_or_else(|| panic!("missing label column: {name}"))
-                            .as_any()
-                            .downcast_ref::<arrow::array::StringArray>()
-                            .unwrap_or_else(|| panic!("label column {name} must be Utf8"))
+                        batch.column_by_name(name).map(|col| {
+                            col.as_any()
+                                .downcast_ref::<arrow::array::StringArray>()
+                                .unwrap_or_else(|| panic!("label column {name} must be Utf8"))
+                        })
                     })
                     .collect();
 
                 for row in 0..batch.num_rows() {
-                    out_ts.append_value(ts_arr.value(row));
-                    out_val.append_value(func.evaluate(val_arr.value(row)));
+                    let ts = ts_arr.value(row);
+                    let val = val_arr.value(row);
+
+                    out_ts.append_value(ts);
+                    out_val.append_value(func.evaluate(val));
                     for (i, arr) in label_arrays.iter().enumerate() {
-                        out_labels[i].append_value(arr.value(row));
+                        let v = arr.map(|a| a.value(row)).unwrap_or("");
+                        out_label_builders[i].append_value(v);
                     }
                 }
             }
 
-            // Build output RecordBatch preserving the input schema column order.
+            // Build output columns in schema field order.
             let mut columns: Vec<arrow::array::ArrayRef> = Vec::new();
             for field in schema.fields() {
                 let name = field.name().as_str();
@@ -150,9 +151,7 @@ impl ExecutionPlan for InstantFnExec {
                 } else if name == "value" {
                     columns.push(Arc::new(out_val.finish()));
                 } else if let Some(idx) = label_columns.iter().position(|n| n == name) {
-                    columns.push(Arc::new(out_labels[idx].finish()));
-                } else {
-                    columns.push(arrow::array::new_empty_array(field.data_type()));
+                    columns.push(Arc::new(out_label_builders[idx].finish()));
                 }
             }
 
