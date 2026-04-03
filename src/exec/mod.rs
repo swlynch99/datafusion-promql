@@ -91,7 +91,9 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
 
         if let Some(eval) = node.as_any().downcast_ref::<InstantFuncEval>() {
             let child = Arc::clone(&physical_inputs[0]);
-            let exec = InstantFuncExec::new(child, eval.func);
+            let output_schema: arrow::datatypes::SchemaRef =
+                Arc::new(eval.output_schema.as_arrow().clone());
+            let exec = InstantFuncExec::new(child, eval.func, output_schema);
             return Ok(Some(Arc::new(exec)));
         }
 

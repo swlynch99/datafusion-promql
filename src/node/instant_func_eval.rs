@@ -2,26 +2,50 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use datafusion::common::DFSchemaRef;
+use arrow::datatypes::{Field, Schema};
+use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
+use crate::error::{PromqlError, Result};
 use crate::func::InstantFunction;
 
-/// Custom logical node for applying an instant vector function to an instant vector.
+/// Custom logical node for instant vector functions (e.g., `ln`, `log2`, `round`).
 ///
-/// Transforms the `value` column according to the function, passing all other columns
-/// through unchanged.
+/// Wraps a child instant vector plan and applies `func` to each sample value.
+/// The `__name__` label is dropped from the output, matching Prometheus semantics.
 #[derive(Debug, Clone)]
 pub(crate) struct InstantFuncEval {
     pub input: LogicalPlan,
     pub func: InstantFunction,
+    pub output_schema: DFSchemaRef,
 }
 
 impl InstantFuncEval {
-    pub fn new(input: LogicalPlan, func: InstantFunction) -> Self {
-        Self { input, func }
+    pub fn new(input: LogicalPlan, func: InstantFunction) -> Result<Self> {
+        let output_schema = compute_output_schema(&input, func)?;
+        Ok(Self {
+            input,
+            func,
+            output_schema,
+        })
     }
+}
+
+fn compute_output_schema(input: &LogicalPlan, func: InstantFunction) -> Result<DFSchemaRef> {
+    let input_schema = input.schema();
+    let fields: Vec<Field> = input_schema
+        .fields()
+        .iter()
+        .filter(|f| !func.drops_metric_name() || f.name() != "__name__")
+        .map(|f| f.as_ref().clone())
+        .collect();
+
+    let schema = Schema::new(fields);
+    let df_schema =
+        DFSchema::try_from(schema).map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+    Ok(Arc::new(df_schema))
 }
 
 impl UserDefinedLogicalNodeCore for InstantFuncEval {
@@ -34,8 +58,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        // Same schema as input: we only transform the value column.
-        self.input.schema()
+        &self.output_schema
     }
 
     fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
@@ -43,7 +66,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantFuncEval: {}", self.func)
+        write!(f, "InstantFuncEval: func={}", self.func)
     }
 
     fn with_exprs_and_inputs(
@@ -54,6 +77,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
             func: self.func,
+            output_schema: Arc::clone(&self.output_schema),
         })
     }
 
@@ -67,6 +91,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
 impl PartialEq for InstantFuncEval {
     fn eq(&self, other: &Self) -> bool {
         match (self.func, other.func) {
+            (InstantFunction::Ln, InstantFunction::Ln) => true,
             (InstantFunction::Log2, InstantFunction::Log2) => true,
             (
                 InstantFunction::Round { to_nearest: a },
@@ -76,15 +101,13 @@ impl PartialEq for InstantFuncEval {
         }
     }
 }
-
 impl Eq for InstantFuncEval {}
 
 impl Hash for InstantFuncEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self.func {
-            InstantFunction::Log2 => {
-                "log2".hash(state);
-            }
+            InstantFunction::Ln => "ln".hash(state),
+            InstantFunction::Log2 => "log2".hash(state),
             InstantFunction::Round { to_nearest } => {
                 "round".hash(state);
                 to_nearest.to_bits().hash(state);

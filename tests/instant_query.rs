@@ -165,6 +165,46 @@ async fn test_instant_query_lookback_window() {
 }
 
 #[tokio::test]
+async fn test_ln_instant_query() {
+    let source = make_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // ln(cpu_usage) at t=3000: values are 30.0 and 70.0.
+    let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let result = engine.instant_query("ln(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            // ln(30.0)
+            let expected_host1 = 30.0_f64.ln();
+            assert!(
+                (samples[0].value - expected_host1).abs() < 1e-10,
+                "expected ln(30) = {expected_host1}, got {}",
+                samples[0].value
+            );
+
+            // ln(70.0)
+            let expected_host2 = 70.0_f64.ln();
+            assert!(
+                (samples[1].value - expected_host2).abs() < 1e-10,
+                "expected ln(70) = {expected_host2}, got {}",
+                samples[1].value
+            );
+
+            // __name__ should be dropped
+            assert!(
+                samples[0].labels.get("__name__").is_none(),
+                "ln() should drop __name__"
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn test_instant_query_with_label_filter() {
     let source = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
