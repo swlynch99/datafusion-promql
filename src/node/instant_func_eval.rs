@@ -11,7 +11,7 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 use crate::error::{PromqlError, Result};
 use crate::func::InstantFunction;
 
-/// Custom logical node for instant vector functions (e.g., `ln`, `log2`, `round`).
+/// Custom logical node for instant vector functions (e.g., `abs`, `ceil`, `floor`, `ln`).
 ///
 /// Wraps a child instant vector plan and applies `func` to each sample value.
 /// The `__name__` label is dropped from the output, matching Prometheus semantics.
@@ -24,7 +24,7 @@ pub(crate) struct InstantFuncEval {
 
 impl InstantFuncEval {
     pub fn new(input: LogicalPlan, func: InstantFunction) -> Result<Self> {
-        let output_schema = compute_output_schema(&input, func)?;
+        let output_schema = compute_output_schema(&input)?;
         Ok(Self {
             input,
             func,
@@ -33,12 +33,13 @@ impl InstantFuncEval {
     }
 }
 
-fn compute_output_schema(input: &LogicalPlan, func: InstantFunction) -> Result<DFSchemaRef> {
-    let input_schema = input.schema();
-    let fields: Vec<Field> = input_schema
+/// Build the output schema: same as input but with `__name__` dropped.
+fn compute_output_schema(input: &LogicalPlan) -> Result<DFSchemaRef> {
+    let fields: Vec<Field> = input
+        .schema()
         .fields()
         .iter()
-        .filter(|f| !func.drops_metric_name() || f.name() != "__name__")
+        .filter(|f| f.name() != "__name__")
         .map(|f| f.as_ref().clone())
         .collect();
 
@@ -90,33 +91,14 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
 
 impl PartialEq for InstantFuncEval {
     fn eq(&self, other: &Self) -> bool {
-        match (self.func, other.func) {
-            (InstantFunction::Abs, InstantFunction::Abs) => true,
-            (InstantFunction::Ceil, InstantFunction::Ceil) => true,
-            (InstantFunction::Ln, InstantFunction::Ln) => true,
-            (InstantFunction::Log2, InstantFunction::Log2) => true,
-            (
-                InstantFunction::Round { to_nearest: a },
-                InstantFunction::Round { to_nearest: b },
-            ) => a.to_bits() == b.to_bits(),
-            _ => false,
-        }
+        self.func == other.func
     }
 }
 impl Eq for InstantFuncEval {}
 
 impl Hash for InstantFuncEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        match self.func {
-            InstantFunction::Abs => "abs".hash(state),
-            InstantFunction::Ceil => "ceil".hash(state),
-            InstantFunction::Ln => "ln".hash(state),
-            InstantFunction::Log2 => "log2".hash(state),
-            InstantFunction::Round { to_nearest } => {
-                "round".hash(state);
-                to_nearest.to_bits().hash(state);
-            }
-        }
+        self.func.hash(state);
     }
 }
 

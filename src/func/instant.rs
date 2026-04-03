@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
@@ -7,6 +8,8 @@ pub(crate) enum InstantFunction {
     Abs,
     /// Round each sample value up to the nearest integer.
     Ceil,
+    /// Round each sample value down to the nearest integer.
+    Floor,
     /// Natural logarithm of each sample value.
     Ln,
     /// Base-2 logarithm of each sample value.
@@ -15,35 +18,59 @@ pub(crate) enum InstantFunction {
     Round { to_nearest: f64 },
 }
 
+impl fmt::Display for InstantFunction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Abs => write!(f, "abs"),
+            Self::Ceil => write!(f, "ceil"),
+            Self::Floor => write!(f, "floor"),
+            Self::Ln => write!(f, "ln"),
+            Self::Log2 => write!(f, "log2"),
+            Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
+        }
+    }
+}
+
 impl InstantFunction {
     /// Apply the function to a single sample value.
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
             Self::Abs => value.abs(),
             Self::Ceil => value.ceil(),
+            Self::Floor => value.floor(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
         }
     }
 
-    /// Whether this function drops the `__name__` label from its output.
-    ///
-    /// All math instant functions drop the metric name because the result is
-    /// a different quantity from the input.
-    pub fn drops_metric_name(&self) -> bool {
-        true
-    }
+
 }
 
-impl fmt::Display for InstantFunction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+// f64 doesn't implement Eq/Hash, so we implement them manually using bit representation.
+impl PartialEq for InstantFunction {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Abs, Self::Abs) => true,
+            (Self::Ceil, Self::Ceil) => true,
+            (Self::Floor, Self::Floor) => true,
+            (Self::Ln, Self::Ln) => true,
+            (Self::Log2, Self::Log2) => true,
+            (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
+                a.to_bits() == b.to_bits()
+            }
+            _ => false,
+        }
+    }
+}
+impl Eq for InstantFunction {}
+
+impl Hash for InstantFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
         match self {
-            Self::Abs => write!(f, "abs"),
-            Self::Ceil => write!(f, "ceil"),
-            Self::Ln => write!(f, "ln"),
-            Self::Log2 => write!(f, "log2"),
-            Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
+            Self::Abs | Self::Ceil | Self::Floor | Self::Ln | Self::Log2 => {}
+            Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
         }
     }
 }
@@ -56,6 +83,7 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
     match name {
         "abs" => Some(InstantFunction::Abs),
         "ceil" => Some(InstantFunction::Ceil),
+        "floor" => Some(InstantFunction::Floor),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
         "round" => {
@@ -82,6 +110,41 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
 mod tests {
     use super::*;
 
+    // --- abs tests ---
+
+    #[test]
+    fn test_abs_positive() {
+        assert_eq!(InstantFunction::Abs.evaluate(3.5), 3.5);
+    }
+
+    #[test]
+    fn test_abs_negative() {
+        assert_eq!(InstantFunction::Abs.evaluate(-3.5), 3.5);
+    }
+
+    #[test]
+    fn test_abs_zero() {
+        assert_eq!(InstantFunction::Abs.evaluate(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_abs_large() {
+        assert_eq!(InstantFunction::Abs.evaluate(-1e300), 1e300);
+    }
+
+    #[test]
+    fn test_abs_nan_stays_nan() {
+        assert!(InstantFunction::Abs.evaluate(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_lookup_abs() {
+        assert!(matches!(
+            lookup_instant_function("abs", &[]),
+            Some(InstantFunction::Abs)
+        ));
+    }
+
     // --- ceil tests ---
 
     #[test]
@@ -100,7 +163,6 @@ mod tests {
 
     #[test]
     fn test_ceil_negative_fractional() {
-        // ceil(-1.2) = -1, ceil(-0.1) = 0
         assert_eq!(InstantFunction::Ceil.evaluate(-1.2), -1.0);
         assert_eq!(InstantFunction::Ceil.evaluate(-0.1), 0.0);
     }
@@ -133,15 +195,55 @@ mod tests {
         ));
     }
 
+    // --- floor tests ---
+
+    #[test]
+    fn test_floor_positive() {
+        assert_eq!(InstantFunction::Floor.evaluate(3.7), 3.0);
+    }
+
+    #[test]
+    fn test_floor_negative() {
+        assert_eq!(InstantFunction::Floor.evaluate(-3.2), -4.0);
+    }
+
+    #[test]
+    fn test_floor_exact_integer() {
+        assert_eq!(InstantFunction::Floor.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_floor_zero() {
+        assert_eq!(InstantFunction::Floor.evaluate(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_floor_nan() {
+        assert!(InstantFunction::Floor.evaluate(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_floor_infinity() {
+        assert_eq!(
+            InstantFunction::Floor.evaluate(f64::INFINITY),
+            f64::INFINITY
+        );
+    }
+
+    #[test]
+    fn test_lookup_floor() {
+        assert_eq!(
+            lookup_instant_function("floor", &[]),
+            Some(InstantFunction::Floor)
+        );
+    }
+
     // --- ln tests ---
 
     #[test]
     fn test_ln_positive() {
         let result = InstantFunction::Ln.evaluate(1.0);
-        assert!(
-            result.abs() < f64::EPSILON,
-            "ln(1) should be 0, got {result}"
-        );
+        assert!(result.abs() < f64::EPSILON, "ln(1) should be 0, got {result}");
     }
 
     #[test]
@@ -198,39 +300,6 @@ mod tests {
     // --- log2 tests ---
 
     #[test]
-    fn test_abs_positive() {
-        assert_eq!(InstantFunction::Abs.evaluate(3.5), 3.5);
-    }
-
-    #[test]
-    fn test_abs_negative() {
-        assert_eq!(InstantFunction::Abs.evaluate(-3.5), 3.5);
-    }
-
-    #[test]
-    fn test_abs_zero() {
-        assert_eq!(InstantFunction::Abs.evaluate(0.0), 0.0);
-    }
-
-    #[test]
-    fn test_abs_large() {
-        assert_eq!(InstantFunction::Abs.evaluate(-1e300), 1e300);
-    }
-
-    #[test]
-    fn test_abs_nan_stays_nan() {
-        assert!(InstantFunction::Abs.evaluate(f64::NAN).is_nan());
-    }
-
-    #[test]
-    fn test_lookup_abs() {
-        assert!(matches!(
-            lookup_instant_function("abs", &[]),
-            Some(InstantFunction::Abs)
-        ));
-    }
-
-    #[test]
     fn test_log2_power_of_two() {
         assert!((InstantFunction::Log2.evaluate(1.0) - 0.0).abs() < f64::EPSILON);
         assert!((InstantFunction::Log2.evaluate(2.0) - 1.0).abs() < f64::EPSILON);
@@ -241,7 +310,6 @@ mod tests {
 
     #[test]
     fn test_log2_zero() {
-        // log2(0) = -inf in IEEE 754
         let result = InstantFunction::Log2.evaluate(0.0);
         assert!(
             result.is_infinite() && result.is_sign_negative(),
@@ -251,7 +319,6 @@ mod tests {
 
     #[test]
     fn test_log2_negative() {
-        // log2 of a negative number is NaN
         let result = InstantFunction::Log2.evaluate(-1.0);
         assert!(result.is_nan(), "log2(-1) should be NaN, got {result}");
     }
@@ -282,7 +349,6 @@ mod tests {
     #[test]
     fn test_round_to_nearest_point_one() {
         let f = InstantFunction::Round { to_nearest: 0.1 };
-        // 1.24 -> 1.2 (rounds to nearest 0.1)
         let result = f.evaluate(1.24);
         assert!((result - 1.2).abs() < 1e-10, "expected 1.2, got {result}");
     }
@@ -297,7 +363,6 @@ mod tests {
 
     #[test]
     fn test_round_to_nearest_zero() {
-        // When to_nearest is 0, value passes through unchanged.
         let f = InstantFunction::Round { to_nearest: 0.0 };
         assert!((f.evaluate(3.7) - 3.7).abs() < f64::EPSILON);
     }
@@ -305,17 +370,17 @@ mod tests {
     #[test]
     fn test_round_negative_values() {
         let f = InstantFunction::Round { to_nearest: 1.0 };
-        // floor(-2.3 + 0.5) = floor(-1.8) = -2
         assert!(
             (f.evaluate(-2.3) - (-2.0)).abs() < f64::EPSILON,
             "-2.3 -> -2"
         );
-        // floor(-2.7 + 0.5) = floor(-2.2) = -3
         assert!(
             (f.evaluate(-2.7) - (-3.0)).abs() < f64::EPSILON,
             "-2.7 -> -3"
         );
     }
+
+    // --- lookup tests ---
 
     #[test]
     fn test_lookup_instant_function_round_no_args() {
