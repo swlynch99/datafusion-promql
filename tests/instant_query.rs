@@ -225,3 +225,119 @@ async fn test_instant_query_with_label_filter() {
         other => panic!("expected Vector result, got {other:?}"),
     }
 }
+
+/// A metric source with fractional sample values, used to exercise ceil/floor/round.
+fn make_fractional_source() -> InMemoryMetricSource {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("__name__", DataType::Utf8, false),
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new("value", DataType::Float64, false),
+        Field::new("instance", DataType::Utf8, false),
+        Field::new("job", DataType::Utf8, false),
+    ]));
+
+    // Two series at t=3000 with fractional values:
+    //   host1: 1.2   -> ceil = 2.0
+    //   host2: -1.7  -> ceil = -1.0
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["cpu_usage", "cpu_usage"])),
+            Arc::new(Int64Array::from(vec![3000_i64, 3000_i64])),
+            Arc::new(Float64Array::from(vec![1.2_f64, -1.7_f64])),
+            Arc::new(StringArray::from(vec!["host1", "host2"])),
+            Arc::new(StringArray::from(vec!["node_exporter", "node_exporter"])),
+        ],
+    )
+    .expect("failed to create fractional test batch");
+
+    InMemoryMetricSource::new(schema, vec![batch])
+}
+
+#[tokio::test]
+async fn test_ceil_instant_query() {
+    let source = make_fractional_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let result = engine.instant_query("ceil(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            // host1: ceil(1.2) = 2.0
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            assert!(
+                (samples[0].value - 2.0).abs() < f64::EPSILON,
+                "expected ceil(1.2) = 2.0, got {}",
+                samples[0].value
+            );
+
+            // host2: ceil(-1.7) = -1.0
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
+            assert!(
+                (samples[1].value - (-1.0)).abs() < f64::EPSILON,
+                "expected ceil(-1.7) = -1.0, got {}",
+                samples[1].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_ceil_exact_integers_unchanged() {
+    let source = make_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // host1=10.0 and host2=50.0 at t=1000: ceil leaves exact integers unchanged.
+    let ts = chrono::Utc.timestamp_millis_opt(1000).unwrap();
+    let result = engine.instant_query("ceil(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            assert!(
+                (samples[0].value - 10.0).abs() < f64::EPSILON,
+                "expected ceil(10.0) = 10.0, got {}",
+                samples[0].value
+            );
+            assert!(
+                (samples[1].value - 50.0).abs() < f64::EPSILON,
+                "expected ceil(50.0) = 50.0, got {}",
+                samples[1].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_ceil_with_label_filter() {
+    let source = make_fractional_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let result = engine
+        .instant_query(r#"ceil(cpu_usage{instance="host1"})"#, ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1, "expected 1 series after filtering");
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            assert!(
+                (samples[0].value - 2.0).abs() < f64::EPSILON,
+                "expected ceil(1.2) = 2.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
