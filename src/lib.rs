@@ -60,6 +60,9 @@ impl PromqlEngine {
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_query_planner(Arc::new(PromqlQueryPlanner))
+            .with_optimizer_rule(Arc::new(
+                crate::plan::instant_func_to_projection::InstantFuncToProjection,
+            ))
             .build();
         let ctx = SessionContext::new_with_state(state);
 
