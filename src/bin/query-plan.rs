@@ -27,9 +27,13 @@ struct Cli {
     #[arg(short, long)]
     timestamp: Option<i64>,
 
-    /// Show the logical plan
+    /// Show the logical plan (before optimization)
     #[arg(long)]
     logical: bool,
+
+    /// Show the optimized logical plan
+    #[arg(long)]
+    optimized: bool,
 
     /// Show the physical plan
     #[arg(long)]
@@ -97,12 +101,13 @@ impl MetricSource for ParquetSource {
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    // If neither flag is specified, show both.
-    let (show_logical, show_physical) = if !cli.logical && !cli.physical {
-        (true, true)
-    } else {
-        (cli.logical, cli.physical)
-    };
+    // If neither flag is specified, show all three.
+    let (show_logical, show_optimized, show_physical) =
+        if !cli.logical && !cli.optimized && !cli.physical {
+            (true, true, true)
+        } else {
+            (cli.logical, cli.optimized, cli.physical)
+        };
 
     let source = ParquetSource::new(&cli.file).await?;
     let source = Arc::new(source);
@@ -139,15 +144,28 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let logical_plan =
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?;
 
+    // Build a session state with the PromQL optimizer rule and extension planner.
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_optimizer_rule(Arc::new(
+            datafusion_promql::plan::instant_func_to_projection::InstantFuncToProjection,
+        ))
+        .build();
+
     if show_logical {
         println!("=== Logical Plan ===");
         println!("{}", logical_plan.display_indent_schema());
         println!();
     }
 
+    if show_optimized {
+        let optimized_plan = state.optimize(&logical_plan)?;
+        println!("=== Optimized Logical Plan ===");
+        println!("{}", optimized_plan.display_indent_schema());
+        println!();
+    }
+
     if show_physical {
-        // Build a session with the PromQL extension planner.
-        let state = SessionStateBuilder::new().with_default_features().build();
         let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
             datafusion_promql::exec::PromqlExtensionPlanner,
         )]);

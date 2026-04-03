@@ -11,7 +11,7 @@ use crate::node::InstantFuncEval;
 /// standard DataFusion `Projection` plans with UDF expressions on the
 /// `value` column.
 #[derive(Debug)]
-pub(crate) struct InstantFuncToProjection;
+pub struct InstantFuncToProjection;
 
 impl OptimizerRule for InstantFuncToProjection {
     fn name(&self) -> &str {
