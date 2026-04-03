@@ -122,6 +122,7 @@ pub(crate) async fn plan_vector_selector(
     match format {
         TableFormat::Wide(mapping) => {
             // Normalize wide format to long format via UNION ALL projections.
+            // After normalization, `timestamp` is always Int64 milliseconds.
             let (plan, label_columns) = crate::normalize::normalize_wide_to_long(
                 provider,
                 &mapping,
@@ -130,14 +131,12 @@ pub(crate) async fn plan_vector_selector(
             )?;
 
             // Apply time range filter and sort on the normalized output.
+            // Use Int64 literals directly since the normalized timestamp is always Int64 ms.
             let plan = LogicalPlanBuilder::from(plan)
                 .filter(
                     col("timestamp")
-                        .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ms))
-                        .and(
-                            col("timestamp")
-                                .lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms)),
-                        ),
+                        .gt_eq(lit(expanded_range.start_ms))
+                        .and(col("timestamp").lt_eq(lit(expanded_range.end_ms))),
                 )
                 .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
                 .sort(vec![col("timestamp").sort(true, false)])
