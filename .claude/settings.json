@@ -1,13 +1,13 @@
 {
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.rs) cargo fmt ;; esac; } 2>/dev/null || true",
-            "timeout": 30,
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && { input=$(cat); echo \"$input\" | jq -r '.tool_input.command // empty' | grep -q 'git commit' && cargo +nightly fmt --all 2>/dev/null; } || true",
+            "timeout": 60,
             "statusMessage": "Running cargo fmt..."
           }
         ]
