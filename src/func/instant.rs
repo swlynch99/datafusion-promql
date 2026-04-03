@@ -75,7 +75,10 @@ mod tests {
     #[test]
     fn test_ln_positive() {
         let result = InstantFunction::Ln.evaluate(1.0);
-        assert!(result.abs() < f64::EPSILON, "ln(1) should be 0, got {result}");
+        assert!(
+            result.abs() < f64::EPSILON,
+            "ln(1) should be 0, got {result}"
+        );
     }
 
     #[test]
