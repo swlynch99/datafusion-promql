@@ -85,7 +85,13 @@ impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            Self::Abs | Self::Ceil | Self::Floor | Self::Ln | Self::Log2 | Self::Log10 | Self::Sqrt => {}
+            Self::Abs
+            | Self::Ceil
+            | Self::Floor
+            | Self::Ln
+            | Self::Log2
+            | Self::Log10
+            | Self::Sqrt => {}
             Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
         }
     }
