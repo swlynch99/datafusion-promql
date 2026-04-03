@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
+use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
@@ -10,11 +11,16 @@ use crate::datasource::{ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSourc
 use crate::error::{PromqlError, Result};
 use crate::types::{Labels, TimeRange};
 
-/// A [`MetricSource`] that reads wide-format Rezolus parquet files.
+/// A [`MetricSource`] that reads wide-format parquet files whose columns carry
+/// Arrow field-level metadata encoding the metric name and labels.
 ///
-/// Column names encode metric name and labels using the Rezolus naming
-/// convention. The engine's normalization layer converts these to long format
-/// at query time.
+/// Each column's `field.metadata()` is inspected:
+/// - `"metric"` key → metric name (fallback: column name with `:buckets` stripped)
+/// - Reserved keys (`metric`, `unit`, `grouping_power`, `max_value_power`) are excluded
+/// - All remaining key/value pairs become label key/value pairs
+///
+/// The DataFusion execution layer converts the wide table to long format at
+/// query time via a UNION ALL of per-column projections.
 pub struct ParquetMetricSource {
     table_provider: Arc<dyn TableProvider>,
     column_mapping: ColumnMapping,
@@ -81,71 +87,47 @@ impl MetricSource for ParquetMetricSource {
     }
 }
 
-/// Build a [`ColumnMapping`] for the Rezolus parquet column naming convention.
+/// Build a [`ColumnMapping`] that reads metric names and labels from Arrow
+/// field metadata, following the same convention as metriken-query.
 pub fn rezolus_column_mapping() -> ColumnMapping {
     ColumnMapping {
         timestamp_column: "timestamp".to_string(),
         ignore_columns: vec!["duration".to_string()],
-        parse_column: Arc::new(rezolus_parse_column),
+        parse_column: Arc::new(parse_column_from_metadata),
     }
 }
 
-/// Parse a Rezolus-style column name into `(metric_name, labels)`.
+/// Parse a column's metric name and labels from its Arrow field metadata.
 ///
-/// Patterns (checked in order):
-/// 1. Ends with `:buckets` → `None` (histogram bucket, skip)
-/// 2. Contains `//` → cgroup metric:
-///    `metric_name//cgroup_path/pid` → labels `{cgroup="/path", id="pid"}`
-///    Edge case: `metric///1` → `{cgroup="/", id="1"}`
-/// 3. Contains `/` → split at first `/`:
-///    - If remainder contains `/`: `metric/subtype/id` → `{op="subtype", id="id"}`
-///    - Otherwise: `metric/subtype` → `{op="subtype"}`
-/// 4. No `/` → plain metric, no labels
-pub fn rezolus_parse_column(col_name: &str) -> Option<(String, Labels)> {
-    // Skip histogram bucket columns.
-    if col_name.ends_with(":buckets") {
-        return None;
-    }
+/// Follows the same convention as metriken-query:
+/// - The `"metric"` metadata key provides the metric name. If absent, the
+///   column name is used (with a `:buckets` suffix stripped if present).
+/// - Reserved metadata keys (`metric`, `unit`, `grouping_power`,
+///   `max_value_power`) are excluded from labels.
+/// - All remaining metadata key/value pairs become label key/value pairs.
+pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
+    let meta = field.metadata();
 
-    // Cgroup pattern: contains "//"
-    if let Some(pos) = col_name.find("//") {
-        let metric_name = &col_name[..pos];
-        let remainder = &col_name[pos + 2..]; // e.g. "system.slice/chrony.service/28" or "/1"
+    let name = if let Some(n) = meta.get("metric") {
+        n.clone()
+    } else {
+        let col_name = field.name();
+        col_name
+            .strip_suffix(":buckets")
+            .unwrap_or(col_name)
+            .to_string()
+    };
 
-        let mut labels = Labels::new();
-        if let Some(last_slash) = remainder.rfind('/') {
-            let cgroup_path = &remainder[..last_slash]; // may be empty for "///1"
-            let id = &remainder[last_slash + 1..];
-            labels.insert("cgroup".to_string(), format!("/{cgroup_path}"));
-            labels.insert("id".to_string(), id.to_string());
-        } else {
-            // No slash in remainder — treat entire remainder as cgroup path.
-            labels.insert("cgroup".to_string(), format!("/{remainder}"));
+    const RESERVED: &[&str] = &["metric", "unit", "grouping_power", "max_value_power"];
+
+    let mut labels = Labels::new();
+    for (k, v) in meta {
+        if !RESERVED.contains(&k.as_str()) {
+            labels.insert(k.clone(), v.clone());
         }
-        return Some((metric_name.to_string(), labels));
     }
 
-    // Slash-separated pattern.
-    if let Some(first_slash) = col_name.find('/') {
-        let metric_name = &col_name[..first_slash];
-        let remainder = &col_name[first_slash + 1..];
-
-        let mut labels = Labels::new();
-        if let Some(second_slash) = remainder.find('/') {
-            // Two-level: metric/op/id  (e.g. softirq/net_rx/0)
-            let op = &remainder[..second_slash];
-            let id = &remainder[second_slash + 1..];
-            labels.insert("op".to_string(), op.to_string());
-            labels.insert("id".to_string(), id.to_string());
-        } else {
-            // Single-level: metric/op  (e.g. blockio_bytes/read)
-            labels.insert("op".to_string(), remainder.to_string());
-        }
-        return Some((metric_name.to_string(), labels));
-    }
-
-    // Plain metric name, no labels.
-    Some((col_name.to_string(), Labels::new()))
+    Some((name, labels))
 }
 
 /// Build deduplicated [`MetricMeta`] from the parquet schema.
@@ -168,13 +150,11 @@ fn build_metric_metadata(
 
         // Only include numeric columns (skip List<u64> histograms etc.).
         match field.data_type() {
-            arrow::datatypes::DataType::UInt64
-            | arrow::datatypes::DataType::Int64
-            | arrow::datatypes::DataType::Float64 => {}
+            DataType::UInt64 | DataType::Int64 | DataType::Float64 => {}
             _ => continue,
         }
 
-        if let Some((metric_name, labels)) = (mapping.parse_column)(col_name) {
+        if let Some((metric_name, labels)) = (mapping.parse_column)(field.as_ref()) {
             let entry = metric_labels.entry(metric_name).or_default();
             for key in labels.keys() {
                 entry.insert(key.clone());
@@ -208,54 +188,84 @@ fn matcher_matches(name: &str, matcher: &Matcher) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn make_field(name: &str, meta: HashMap<String, String>) -> Field {
+        Field::new(name, DataType::UInt64, false).with_metadata(meta)
+    }
 
     #[test]
-    fn test_parse_plain_metric() {
-        let (name, labels) = rezolus_parse_column("cpu_cores").unwrap();
+    fn test_metric_name_from_metadata() {
+        let mut meta = HashMap::new();
+        meta.insert("metric".to_string(), "cpu_usage".to_string());
+        meta.insert("cpu".to_string(), "0".to_string());
+        let field = make_field("cpu_usage/0", meta);
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        assert_eq!(name, "cpu_usage");
+        assert_eq!(labels.get("cpu").unwrap(), "0");
+        assert!(!labels.contains_key("metric"));
+    }
+
+    #[test]
+    fn test_column_name_fallback_no_metadata() {
+        let field = make_field("cpu_cores", HashMap::new());
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "cpu_cores");
         assert!(labels.is_empty());
     }
 
     #[test]
-    fn test_parse_single_slash() {
-        let (name, labels) = rezolus_parse_column("blockio_bytes/read").unwrap();
-        assert_eq!(name, "blockio_bytes");
+    fn test_buckets_suffix_stripped_in_fallback() {
+        let field = make_field("tcp_srtt:buckets", HashMap::new());
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        assert_eq!(name, "tcp_srtt");
+        assert!(labels.is_empty());
+    }
+
+    #[test]
+    fn test_reserved_keys_excluded_from_labels() {
+        let mut meta = HashMap::new();
+        meta.insert("metric".to_string(), "latency".to_string());
+        meta.insert("unit".to_string(), "nanoseconds".to_string());
+        meta.insert("grouping_power".to_string(), "3".to_string());
+        meta.insert("max_value_power".to_string(), "63".to_string());
+        meta.insert("op".to_string(), "read".to_string());
+        let field = make_field("latency:buckets", meta);
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        assert_eq!(name, "latency");
         assert_eq!(labels.get("op").unwrap(), "read");
         assert_eq!(labels.len(), 1);
     }
 
     #[test]
-    fn test_parse_double_slash_cgroup() {
-        let (name, labels) =
-            rezolus_parse_column("cgroup_cpu_cycles//system.slice/chrony.service/28").unwrap();
-        assert_eq!(name, "cgroup_cpu_cycles");
-        assert_eq!(
-            labels.get("cgroup").unwrap(),
-            "/system.slice/chrony.service"
-        );
-        assert_eq!(labels.get("id").unwrap(), "28");
-    }
-
-    #[test]
-    fn test_parse_root_cgroup() {
-        // cgroup_cpu_cycles///1 means cgroup="/", id="1"
-        let (name, labels) = rezolus_parse_column("cgroup_cpu_cycles///1").unwrap();
-        assert_eq!(name, "cgroup_cpu_cycles");
-        assert_eq!(labels.get("cgroup").unwrap(), "/");
-        assert_eq!(labels.get("id").unwrap(), "1");
-    }
-
-    #[test]
-    fn test_parse_two_level_slash() {
-        let (name, labels) = rezolus_parse_column("softirq/net_rx/0").unwrap();
+    fn test_multiple_labels_from_metadata() {
+        let mut meta = HashMap::new();
+        meta.insert("metric".to_string(), "softirq".to_string());
+        meta.insert("op".to_string(), "net_rx".to_string());
+        meta.insert("id".to_string(), "0".to_string());
+        let field = make_field("softirq/net_rx/0", meta);
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "softirq");
         assert_eq!(labels.get("op").unwrap(), "net_rx");
         assert_eq!(labels.get("id").unwrap(), "0");
     }
 
     #[test]
-    fn test_parse_bucket_skipped() {
-        assert!(rezolus_parse_column("blockio_latency/read:buckets").is_none());
-        assert!(rezolus_parse_column("tcp_srtt:buckets").is_none());
+    fn test_cgroup_labels_from_metadata() {
+        let mut meta = HashMap::new();
+        meta.insert("metric".to_string(), "cgroup_cpu_cycles".to_string());
+        meta.insert(
+            "cgroup".to_string(),
+            "/system.slice/chrony.service".to_string(),
+        );
+        meta.insert("id".to_string(), "28".to_string());
+        let field = make_field("cgroup_cpu_cycles//system.slice/chrony.service/28", meta);
+        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        assert_eq!(name, "cgroup_cpu_cycles");
+        assert_eq!(
+            labels.get("cgroup").unwrap(),
+            "/system.slice/chrony.service"
+        );
+        assert_eq!(labels.get("id").unwrap(), "28");
     }
 }

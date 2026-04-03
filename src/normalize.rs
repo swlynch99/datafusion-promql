@@ -15,7 +15,7 @@ use datafusion::prelude::{cast, col, lit};
 struct MatchedColumn {
     /// The original column name in the wide-format table.
     col_name: String,
-    /// The labels parsed from the column name.
+    /// The labels parsed from the column field metadata.
     labels: Labels,
 }
 
@@ -44,7 +44,7 @@ fn find_matching_columns(
             _ => continue,
         }
 
-        let (parsed_metric, labels) = match (mapping.parse_column)(col_name) {
+        let (parsed_metric, labels) = match (mapping.parse_column)(field.as_ref()) {
             Some(pair) => pair,
             None => continue,
         };
