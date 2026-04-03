@@ -105,8 +105,16 @@ pub fn rezolus_column_mapping() -> ColumnMapping {
 /// - Reserved metadata keys (`metric`, `unit`, `grouping_power`,
 ///   `max_value_power`) are excluded from labels.
 /// - All remaining metadata key/value pairs become label key/value pairs.
+/// - If the field has no metadata at all, falls back to [`rezolus_parse_column`]
+///   to parse metric name and labels from the column name using the
+///   slash-based naming convention.
 pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
     let meta = field.metadata();
+
+    // No metadata: fall back to name-based parsing.
+    if meta.is_empty() {
+        return rezolus_parse_column(field.name());
+    }
 
     let name = if let Some(n) = meta.get("metric") {
         n.clone()
@@ -128,6 +136,63 @@ pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
     }
 
     Some((name, labels))
+}
+
+/// Parse a metric name and labels from a Rezolus-style slash-encoded column
+/// name.
+///
+/// Rezolus (and the metriken library) historically encoded metric names and
+/// labels into the column name using `/` as a separator:
+///
+/// - `metric_name` → metric name only, no labels
+/// - `metric_name/op` → `{op="op"}`
+/// - `metric_name/op/id` → `{op="op", id="id"}`
+/// - `metric_name//cgroup_path/id` → `{cgroup="/cgroup_path", id="id"}`
+///   (double slash signals a cgroup path; the last component is the numeric
+///   `id` and everything before it, with a leading `/`, is the `cgroup` label)
+///
+/// # Examples
+///
+/// ```text
+/// "cpu_cores"                                      → ("cpu_cores", {})
+/// "blockio_bytes/read"                             → ("blockio_bytes", {op="read"})
+/// "softirq/net_rx/0"                               → ("softirq", {op="net_rx", id="0"})
+/// "cgroup_cpu_cycles//system.slice/foo.service/1"  → ("cgroup_cpu_cycles", {cgroup="/system.slice/foo.service", id="1"})
+/// "cgroup_cpu_cycles///1"                          → ("cgroup_cpu_cycles", {cgroup="/", id="1"})
+/// ```
+pub fn rezolus_parse_column(col_name: &str) -> Option<(String, Labels)> {
+    let mut labels = Labels::new();
+
+    let Some(slash_pos) = col_name.find('/') else {
+        // No slash: plain metric name, no labels.
+        return Some((col_name.to_string(), labels));
+    };
+
+    let metric_name = col_name[..slash_pos].to_string();
+    let rest = &col_name[slash_pos + 1..];
+
+    if let Some(after_double_slash) = rest.strip_prefix('/') {
+        // Double slash: cgroup format.
+        // `after_double_slash` = "system.slice/chrony.service/28" or "/1"
+        // The last component is the `id`; everything before it (prepended with
+        // a `/`) is the `cgroup` label.
+        if let Some(last_slash) = after_double_slash.rfind('/') {
+            let cgroup_part = &after_double_slash[..last_slash];
+            let id = &after_double_slash[last_slash + 1..];
+            labels.insert("cgroup".to_string(), format!("/{cgroup_part}"));
+            labels.insert("id".to_string(), id.to_string());
+        }
+    } else {
+        // Regular format: `op` or `op/id`.
+        let mut parts = rest.splitn(2, '/');
+        let op = parts.next().unwrap_or("");
+        labels.insert("op".to_string(), op.to_string());
+        if let Some(id) = parts.next() {
+            labels.insert("id".to_string(), id.to_string());
+        }
+    }
+
+    Some((metric_name, labels))
 }
 
 /// Build deduplicated [`MetricMeta`] from the parquet schema.
