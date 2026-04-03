@@ -67,10 +67,12 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
 impl PartialEq for InstantFuncEval {
     fn eq(&self, other: &Self) -> bool {
         match (self.func, other.func) {
+            (InstantFunction::Log2, InstantFunction::Log2) => true,
             (
                 InstantFunction::Round { to_nearest: a },
                 InstantFunction::Round { to_nearest: b },
             ) => a.to_bits() == b.to_bits(),
+            _ => false,
         }
     }
 }
@@ -80,6 +82,9 @@ impl Eq for InstantFuncEval {}
 impl Hash for InstantFuncEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self.func {
+            InstantFunction::Log2 => {
+                "log2".hash(state);
+            }
             InstantFunction::Round { to_nearest } => {
                 "round".hash(state);
                 to_nearest.to_bits().hash(state);

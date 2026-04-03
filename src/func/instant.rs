@@ -3,6 +3,8 @@ use std::fmt;
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum InstantFunction {
+    /// Base-2 logarithm of each sample value.
+    Log2,
     /// Round each value to the nearest multiple of `to_nearest`.
     Round { to_nearest: f64 },
 }
@@ -11,6 +13,7 @@ impl InstantFunction {
     /// Apply the function to a single sample value.
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
+            Self::Log2 => value.log2(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
         }
     }
@@ -19,6 +22,7 @@ impl InstantFunction {
 impl fmt::Display for InstantFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Log2 => write!(f, "log2"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
         }
     }
@@ -30,6 +34,7 @@ impl fmt::Display for InstantFunction {
 /// Returns `None` if the name is not a known instant function.
 pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<InstantFunction> {
     match name {
+        "log2" => Some(InstantFunction::Log2),
         "round" => {
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
@@ -53,6 +58,40 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_log2_power_of_two() {
+        assert!((InstantFunction::Log2.evaluate(1.0) - 0.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log2.evaluate(2.0) - 1.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log2.evaluate(4.0) - 2.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log2.evaluate(8.0) - 3.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log2.evaluate(1024.0) - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_log2_zero() {
+        // log2(0) = -inf in IEEE 754
+        let result = InstantFunction::Log2.evaluate(0.0);
+        assert!(
+            result.is_infinite() && result.is_sign_negative(),
+            "log2(0) should be -inf, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_log2_negative() {
+        // log2 of a negative number is NaN
+        let result = InstantFunction::Log2.evaluate(-1.0);
+        assert!(result.is_nan(), "log2(-1) should be NaN, got {result}");
+    }
+
+    #[test]
+    fn test_lookup_log2() {
+        assert!(matches!(
+            lookup_instant_function("log2", &[]),
+            Some(InstantFunction::Log2)
+        ));
+    }
 
     #[test]
     fn test_round_default_to_nearest_one() {
@@ -112,6 +151,7 @@ mod tests {
             InstantFunction::Round { to_nearest } => {
                 assert!((to_nearest - 1.0).abs() < f64::EPSILON)
             }
+            other => panic!("unexpected variant: {other:?}"),
         }
     }
 
@@ -122,6 +162,7 @@ mod tests {
             InstantFunction::Round { to_nearest } => {
                 assert!((to_nearest - 0.5).abs() < f64::EPSILON)
             }
+            other => panic!("unexpected variant: {other:?}"),
         }
     }
 
