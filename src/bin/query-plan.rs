@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::DateTime;
 use clap::Parser;
 use datafusion::catalog::TableProvider;
-use datafusion::execution::SessionStateBuilder;
-use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion::prelude::*;
 
+use datafusion_promql::PromqlPlanner;
 use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
 use datafusion_promql::error::{PromqlError, Result};
 use datafusion_promql::types::TimeRange;
@@ -109,25 +109,17 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             (cli.logical, cli.optimized, cli.physical)
         };
 
-    let source = ParquetSource::new(&cli.file).await?;
-    let source = Arc::new(source);
+    let source = Arc::new(ParquetSource::new(&cli.file).await?);
+    let planner = PromqlPlanner::new(source.clone());
 
-    // Parse and plan
-    let expr = promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
-
-    let (time_range, params) = if let Some(ts_ms) = cli.timestamp {
-        let time_range = TimeRange {
-            start_ms: ts_ms,
-            end_ms: ts_ms,
-        };
-        let params = datafusion_promql::plan::EvalParams {
-            eval_ts_ms: Some(ts_ms),
-            start_ms: ts_ms,
-            end_ms: ts_ms,
-            step_ms: 1,
-        };
-        (time_range, params)
+    let logical_plan = if let Some(ts_ms) = cli.timestamp {
+        let timestamp = DateTime::from_timestamp_millis(ts_ms)
+            .ok_or_else(|| format!("invalid timestamp: {ts_ms}"))?;
+        planner.instant_logical_plan(&cli.query, timestamp).await?
     } else {
+        // Whole-range query: no timestamp, use plan_expr directly.
+        let expr =
+            promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
         let time_range = TimeRange {
             start_ms: i64::MIN,
             end_ms: i64::MAX,
@@ -138,19 +130,8 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             end_ms: i64::MAX,
             step_ms: 1,
         };
-        (time_range, params)
+        datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
     };
-
-    let logical_plan =
-        datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?;
-
-    // Build a session state with the PromQL optimizer rule and extension planner.
-    let state = SessionStateBuilder::new()
-        .with_default_features()
-        .with_optimizer_rule(Arc::new(
-            datafusion_promql::plan::instant_func_to_projection::InstantFuncToProjection,
-        ))
-        .build();
 
     if show_logical {
         println!("=== Logical Plan ===");
@@ -159,18 +140,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
 
     if show_optimized {
-        let optimized_plan = state.optimize(&logical_plan)?;
+        let optimized_plan = planner.optimize_logical_plan(logical_plan.clone())?;
         println!("=== Optimized Logical Plan ===");
         println!("{}", optimized_plan.display_indent_schema());
         println!();
     }
 
     if show_physical {
-        let planner = DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
-            datafusion_promql::exec::PromqlExtensionPlanner,
-        )]);
-        let physical_plan = planner.create_physical_plan(&logical_plan, &state).await?;
-
+        let physical_plan = planner.create_physical_plan(&logical_plan).await?;
         println!("=== Physical Plan ===");
         println!(
             "{}",
