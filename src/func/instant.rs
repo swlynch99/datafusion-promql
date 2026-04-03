@@ -16,6 +16,8 @@ pub(crate) enum InstantFunction {
     Log2,
     /// Round each value to the nearest multiple of `to_nearest`.
     Round { to_nearest: f64 },
+    /// Square root of each sample value. Returns NaN for negative inputs.
+    Sqrt,
 }
 
 impl fmt::Display for InstantFunction {
@@ -27,6 +29,7 @@ impl fmt::Display for InstantFunction {
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
+            Self::Sqrt => write!(f, "sqrt"),
         }
     }
 }
@@ -41,6 +44,7 @@ impl InstantFunction {
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
+            Self::Sqrt => value.sqrt(),
         }
     }
 
@@ -65,6 +69,7 @@ impl PartialEq for InstantFunction {
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
+            (Self::Sqrt, Self::Sqrt) => true,
             _ => false,
         }
     }
@@ -75,7 +80,7 @@ impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            Self::Abs | Self::Ceil | Self::Floor | Self::Ln | Self::Log2 => {}
+            Self::Abs | Self::Ceil | Self::Floor | Self::Ln | Self::Log2 | Self::Sqrt => {}
             Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
         }
     }
@@ -96,6 +101,7 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
         }
+        "sqrt" => Some(InstantFunction::Sqrt),
         _ => None,
     }
 }
@@ -416,5 +422,33 @@ mod tests {
     #[test]
     fn test_lookup_instant_function_unknown() {
         assert!(lookup_instant_function("unknown_func", &[]).is_none());
+    }
+
+    #[test]
+    fn test_sqrt_positive() {
+        assert!((InstantFunction::Sqrt.evaluate(4.0) - 2.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Sqrt.evaluate(9.0) - 3.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Sqrt.evaluate(0.0) - 0.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Sqrt.evaluate(1.0) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_sqrt_negative_is_nan() {
+        assert!(InstantFunction::Sqrt.evaluate(-1.0).is_nan());
+        assert!(InstantFunction::Sqrt.evaluate(-100.0).is_nan());
+    }
+
+    #[test]
+    fn test_sqrt_fractional() {
+        let result = InstantFunction::Sqrt.evaluate(2.0);
+        assert!((result - std::f64::consts::SQRT_2).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_lookup_sqrt() {
+        assert!(matches!(
+            lookup_instant_function("sqrt", &[]),
+            Some(InstantFunction::Sqrt)
+        ));
     }
 }
