@@ -18,7 +18,9 @@ pub(crate) enum InstantFunction {
     /// Base-10 logarithm of each sample value.
     Log10,
     /// Round each value to the nearest multiple of `to_nearest`.
-    Round { to_nearest: f64 },
+    Round {
+        to_nearest: f64,
+    },
     /// Returns the sign of each sample: -1 if negative, 0 if zero, 1 if positive.
     Sgn,
     /// Square root of each sample value. Returns NaN for negative inputs.
