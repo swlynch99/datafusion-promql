@@ -1,5 +1,17 @@
+use std::any::Any;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use arrow::array::AsArray;
+use arrow::datatypes::{DataType, Float64Type};
+use datafusion::common::utils::take_function_args;
+use datafusion::common::{Result as DFResult, ScalarValue};
+use datafusion::functions::math::expr_fn;
+use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
+};
 
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
@@ -46,6 +58,7 @@ impl fmt::Display for InstantFunction {
 
 impl InstantFunction {
     /// Apply the function to a single sample value.
+    #[cfg(test)]
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
             Self::Abs => value.abs(),
@@ -75,6 +88,7 @@ impl InstantFunction {
     ///
     /// All math instant functions drop the metric name because the result is
     /// a different quantity from the input.
+    #[cfg(test)]
     pub fn drops_metric_name(&self) -> bool {
         true
     }
@@ -153,6 +167,96 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
         return value;
     }
     (value / to_nearest + 0.5).floor() * to_nearest
+}
+
+/// Convert an `InstantFunction` to a DataFusion logical `Expr` applied to the
+/// given input expression, aliased as `"value"`.
+pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr {
+    let applied = match func {
+        InstantFunction::Abs => expr_fn::abs(input),
+        InstantFunction::Ceil => expr_fn::ceil(input),
+        InstantFunction::Exp => expr_fn::exp(input),
+        InstantFunction::Floor => expr_fn::floor(input),
+        InstantFunction::Ln => expr_fn::ln(input),
+        InstantFunction::Log2 => expr_fn::log2(input),
+        InstantFunction::Log10 => expr_fn::log10(input),
+        InstantFunction::Sqrt => expr_fn::sqrt(input),
+        InstantFunction::Sgn => expr_fn::signum(input),
+        InstantFunction::Round { to_nearest } => {
+            let udf = make_promql_round_udf(*to_nearest);
+            udf.call(vec![input])
+        }
+    };
+    applied.alias("value")
+}
+
+/// Create a ScalarUDF implementing PromQL's `round(v, to_nearest)` semantics.
+fn make_promql_round_udf(to_nearest: f64) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(PromqlRoundUdf::new(to_nearest)))
+}
+
+#[derive(Debug)]
+struct PromqlRoundUdf {
+    to_nearest: f64,
+    signature: Signature,
+}
+
+impl PromqlRoundUdf {
+    fn new(to_nearest: f64) -> Self {
+        Self {
+            to_nearest,
+            signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq for PromqlRoundUdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_nearest.to_bits() == other.to_nearest.to_bits()
+    }
+}
+impl Eq for PromqlRoundUdf {}
+
+impl std::hash::Hash for PromqlRoundUdf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.to_nearest.to_bits().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for PromqlRoundUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "promql_round"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        let to_nearest = self.to_nearest;
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(promql_round(v, to_nearest))),
+            )),
+            ColumnarValue::Array(array) => {
+                let result = array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| promql_round(x, to_nearest));
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => Ok(arg),
+        }
+    }
 }
 
 #[cfg(test)]
