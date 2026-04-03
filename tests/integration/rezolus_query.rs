@@ -1,5 +1,3 @@
-#![cfg(feature = "parquet")]
-
 //! Tests that construct in-memory wide-format DataFrames using the Rezolus
 //! column naming convention, then execute PromQL queries against them.
 //!
