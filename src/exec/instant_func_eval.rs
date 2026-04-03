@@ -38,6 +38,7 @@ impl InstantFuncExec {
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
         ));
+
         Self {
             child,
             func,

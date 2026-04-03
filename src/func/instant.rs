@@ -14,6 +14,8 @@ pub(crate) enum InstantFunction {
     Ln,
     /// Base-2 logarithm of each sample value.
     Log2,
+    /// Base-10 logarithm of each sample value.
+    Log10,
     /// Round each value to the nearest multiple of `to_nearest`.
     Round { to_nearest: f64 },
     /// Square root of each sample value. Returns NaN for negative inputs.
@@ -28,6 +30,7 @@ impl fmt::Display for InstantFunction {
             Self::Floor => write!(f, "floor"),
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
+            Self::Log10 => write!(f, "log10"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
             Self::Sqrt => write!(f, "sqrt"),
         }
@@ -43,6 +46,7 @@ impl InstantFunction {
             Self::Floor => value.floor(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
+            Self::Log10 => value.log10(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
             Self::Sqrt => value.sqrt(),
         }
@@ -66,6 +70,7 @@ impl PartialEq for InstantFunction {
             (Self::Floor, Self::Floor) => true,
             (Self::Ln, Self::Ln) => true,
             (Self::Log2, Self::Log2) => true,
+            (Self::Log10, Self::Log10) => true,
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
@@ -80,7 +85,13 @@ impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
         match self {
-            Self::Abs | Self::Ceil | Self::Floor | Self::Ln | Self::Log2 | Self::Sqrt => {}
+            Self::Abs
+            | Self::Ceil
+            | Self::Floor
+            | Self::Ln
+            | Self::Log2
+            | Self::Log10
+            | Self::Sqrt => {}
             Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
         }
     }
@@ -97,6 +108,7 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
         "floor" => Some(InstantFunction::Floor),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
+        "log10" => Some(InstantFunction::Log10),
         "round" => {
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
@@ -347,6 +359,40 @@ mod tests {
     }
 
     // --- round tests ---
+
+    #[test]
+    fn test_log10_basic() {
+        assert!((InstantFunction::Log10.evaluate(100.0) - 2.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log10.evaluate(1000.0) - 3.0).abs() < f64::EPSILON);
+        assert!((InstantFunction::Log10.evaluate(1.0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_log10_fractional() {
+        // log10(0.1) = -1
+        assert!((InstantFunction::Log10.evaluate(0.1) - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log10_zero() {
+        // log10(0) = -inf per IEEE 754
+        assert!(InstantFunction::Log10.evaluate(0.0).is_infinite());
+        assert!(InstantFunction::Log10.evaluate(0.0) < 0.0);
+    }
+
+    #[test]
+    fn test_log10_negative() {
+        // log10 of a negative number is NaN
+        assert!(InstantFunction::Log10.evaluate(-1.0).is_nan());
+    }
+
+    #[test]
+    fn test_lookup_log10() {
+        assert!(matches!(
+            lookup_instant_function("log10", &[]),
+            Some(InstantFunction::Log10)
+        ));
+    }
 
     #[test]
     fn test_round_default_to_nearest_one() {
