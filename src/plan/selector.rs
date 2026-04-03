@@ -131,7 +131,10 @@ pub(crate) async fn plan_vector_selector(
                 .filter(
                     col("timestamp")
                         .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ms))
-                        .and(col("timestamp").lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms))),
+                        .and(
+                            col("timestamp")
+                                .lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms)),
+                        ),
                 )
                 .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
                 .sort(vec![col("timestamp").sort(true, false)])
@@ -171,7 +174,9 @@ pub(crate) async fn plan_vector_selector(
         .filter(
             col("timestamp")
                 .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ms))
-                .and(col("timestamp").lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms))),
+                .and(
+                    col("timestamp").lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms)),
+                ),
         )
         .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
 
