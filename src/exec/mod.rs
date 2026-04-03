@@ -20,7 +20,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::node::{
-    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval,
+    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, RangeVectorEval,
+    ScalarBinaryEval,
 };
 
 /// Extension planner that converts our custom logical nodes into physical plans.

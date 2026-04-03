@@ -214,7 +214,11 @@ async fn test_floor_instant_query() {
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(StringArray::from(vec!["cpu_usage", "cpu_usage", "cpu_usage"])),
+            Arc::new(StringArray::from(vec![
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+            ])),
             Arc::new(Int64Array::from(vec![1000_i64, 1000, 1000])),
             Arc::new(Float64Array::from(vec![3.7, -1.2, 5.0])),
             Arc::new(StringArray::from(vec!["host1", "host2", "host3"])),
@@ -234,7 +238,11 @@ async fn test_floor_instant_query() {
             samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
-            assert!((samples[0].value - 3.0).abs() < f64::EPSILON, "host1: {}", samples[0].value);
+            assert!(
+                (samples[0].value - 3.0).abs() < f64::EPSILON,
+                "host1: {}",
+                samples[0].value
+            );
 
             assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
             assert!(
@@ -244,7 +252,11 @@ async fn test_floor_instant_query() {
             );
 
             assert_eq!(samples[2].labels.get("instance").unwrap(), "host3");
-            assert!((samples[2].value - 5.0).abs() < f64::EPSILON, "host3: {}", samples[2].value);
+            assert!(
+                (samples[2].value - 5.0).abs() < f64::EPSILON,
+                "host3: {}",
+                samples[2].value
+            );
 
             assert!(samples[0].labels.get("__name__").is_none());
         }

@@ -43,8 +43,6 @@ impl InstantFunction {
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
         }
     }
-
-
 }
 
 // f64 doesn't implement Eq/Hash, so we implement them manually using bit representation.
@@ -243,7 +241,10 @@ mod tests {
     #[test]
     fn test_ln_positive() {
         let result = InstantFunction::Ln.evaluate(1.0);
-        assert!(result.abs() < f64::EPSILON, "ln(1) should be 0, got {result}");
+        assert!(
+            result.abs() < f64::EPSILON,
+            "ln(1) should be 0, got {result}"
+        );
     }
 
     #[test]
