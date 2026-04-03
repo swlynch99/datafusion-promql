@@ -47,6 +47,29 @@ impl MetricSource for InMemoryMetricSource {
     }
 }
 
+fn make_sgn_test_source() -> InMemoryMetricSource {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("__name__", DataType::Utf8, false),
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new("value", DataType::Float64, false),
+        Field::new("instance", DataType::Utf8, false),
+    ]));
+
+    // Three series: one positive, one negative, one zero at t=1000.
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec!["metric", "metric", "metric"])),
+            Arc::new(Int64Array::from(vec![1000_i64, 1000, 1000])),
+            Arc::new(Float64Array::from(vec![42.0, -7.5, 0.0])),
+            Arc::new(StringArray::from(vec!["positive", "negative", "zero"])),
+        ],
+    )
+    .expect("failed to create sgn test batch");
+
+    InMemoryMetricSource::new(schema, vec![batch])
+}
+
 fn make_test_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
@@ -100,6 +123,36 @@ fn make_test_source() -> InMemoryMetricSource {
     .expect("failed to create test batch");
 
     InMemoryMetricSource::new(schema, vec![batch])
+}
+
+#[tokio::test]
+async fn test_sgn_positive_negative_zero() {
+    let source = make_sgn_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    let ts = chrono::Utc.timestamp_millis_opt(1000).unwrap();
+    let result = engine.instant_query("sgn(metric)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 3, "expected 3 series");
+
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            // negative: sgn(-7.5) = -1.0
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "negative");
+            assert!((samples[0].value - (-1.0)).abs() < f64::EPSILON);
+
+            // positive: sgn(42.0) = 1.0
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "positive");
+            assert!((samples[1].value - 1.0).abs() < f64::EPSILON);
+
+            // zero: sgn(0.0) = 0.0
+            assert_eq!(samples[2].labels.get("instance").unwrap(), "zero");
+            assert!((samples[2].value - 0.0).abs() < f64::EPSILON);
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
 }
 
 #[tokio::test]
