@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.rs) cargo fmt ;; esac; } 2>/dev/null || true",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; case \"$f\" in *.rs) cargo fmt ;; esac; } 2>/dev/null || true",
             "timeout": 30,
             "statusMessage": "Running cargo fmt..."
           }
