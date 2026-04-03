@@ -75,7 +75,6 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
         if let Some(eval) = node.as_any().downcast_ref::<BinaryEval>() {
             let lhs = Arc::clone(&physical_inputs[0]);
             let rhs = Arc::clone(&physical_inputs[1]);
-            // Convert the logical node's DFSchemaRef to a physical SchemaRef.
             let output_schema: arrow::datatypes::SchemaRef =
                 Arc::new(eval.output_schema.as_arrow().clone());
             let exec = BinaryExec::new(
@@ -86,14 +85,6 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.matching.clone(),
                 output_schema,
             );
-            return Ok(Some(Arc::new(exec)));
-        }
-
-        if let Some(eval) = node.as_any().downcast_ref::<InstantFuncEval>() {
-            let child = Arc::clone(&physical_inputs[0]);
-            let output_schema: arrow::datatypes::SchemaRef =
-                Arc::new(eval.output_schema.as_arrow().clone());
-            let exec = InstantFuncExec::new(child, eval.func, output_schema);
             return Ok(Some(Arc::new(exec)));
         }
 
@@ -109,6 +100,14 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.return_bool,
                 output_schema,
             );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<InstantFuncEval>() {
+            let child = Arc::clone(&physical_inputs[0]);
+            let output_schema: arrow::datatypes::SchemaRef =
+                Arc::new(eval.output_schema.as_arrow().clone());
+            let exec = InstantFuncExec::new(child, eval.func, output_schema);
             return Ok(Some(Arc::new(exec)));
         }
 

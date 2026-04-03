@@ -13,10 +13,11 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 
 use crate::func::InstantFunction;
 
-/// Physical plan node for instant vector functions (e.g., `ln`, `log2`, `round`).
+/// Physical plan node for instant vector functions (e.g., `abs`, `ceil`, `floor`, `ln`).
 ///
 /// Applies `func` to the `value` column of each row from the child plan,
-/// forwarding timestamps and label columns unchanged.
+/// forwarding timestamps and label columns unchanged. Columns absent from the
+/// output schema (e.g. `__name__`) are dropped.
 #[derive(Debug)]
 pub(crate) struct InstantFuncExec {
     child: Arc<dyn ExecutionPlan>,
@@ -118,13 +119,13 @@ impl ExecutionPlan for InstantFuncExec {
             for batch in &batches {
                 let ts_arr = batch
                     .column_by_name("timestamp")
-                    .expect("missing timestamp column")
+                    .expect("missing timestamp")
                     .as_any()
                     .downcast_ref::<arrow::array::Int64Array>()
                     .expect("timestamp must be Int64");
                 let val_arr = batch
                     .column_by_name("value")
-                    .expect("missing value column")
+                    .expect("missing value")
                     .as_any()
                     .downcast_ref::<arrow::array::Float64Array>()
                     .expect("value must be Float64");
@@ -143,10 +144,9 @@ impl ExecutionPlan for InstantFuncExec {
                 for row in 0..batch.num_rows() {
                     let ts = ts_arr.value(row);
                     let val = val_arr.value(row);
-                    let result = func.evaluate(val);
 
                     out_ts.append_value(ts);
-                    out_val.append_value(result);
+                    out_val.append_value(func.evaluate(val));
                     for (i, arr) in label_arrays.iter().enumerate() {
                         let v = arr.map(|a| a.value(row)).unwrap_or("");
                         out_label_builders[i].append_value(v);

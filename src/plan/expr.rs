@@ -101,6 +101,36 @@ async fn plan_call(
 ) -> Result<LogicalPlan> {
     let func_name = call.func.name;
 
+    // Extra scalar arguments (args after the first vector arg) for functions like round().
+    let extra_scalar_args: Vec<f64> = call
+        .args
+        .args
+        .iter()
+        .skip(1)
+        .filter_map(|arg| {
+            if let Expr::NumberLiteral(lit) = arg.as_ref() {
+                Some(lit.val)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Check if this is an instant vector function.
+    if let Some(func) = lookup_instant_function(func_name, &extra_scalar_args) {
+        if call.args.args.is_empty() {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() requires at least 1 argument"
+            )));
+        }
+        let vector_arg = &call.args.args[0];
+        let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+        let node = InstantFuncEval::new(child_plan, func)?;
+        return Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(node),
+        }));
+    }
+
     // Check if this is a range vector function.
     if let Some(range_func) = lookup_range_function(func_name) {
         // Range functions expect exactly one argument: a MatrixSelector.
@@ -142,44 +172,14 @@ async fn plan_call(
             )
         };
 
-        Ok(LogicalPlan::Extension(Extension {
+        return Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
-        }))
-    } else {
-        // Check if this is an instant vector function.
-        // The first argument is the instant vector; any remaining arguments are extra scalars.
-        let extra_scalar_args: Vec<f64> = call
-            .args
-            .args
-            .iter()
-            .skip(1)
-            .filter_map(|arg| {
-                if let Expr::NumberLiteral(lit) = arg.as_ref() {
-                    Some(lit.val)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if let Some(func) = lookup_instant_function(func_name, &extra_scalar_args) {
-            if call.args.args.is_empty() {
-                return Err(PromqlError::Plan(format!(
-                    "{func_name}() requires at least 1 argument"
-                )));
-            }
-            let vector_arg = &call.args.args[0];
-            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
-            let node = InstantFuncEval::new(child_plan, func)?;
-            return Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(node),
-            }));
-        }
-
-        Err(PromqlError::NotImplemented(format!(
-            "function not yet supported: {func_name}"
-        )))
+        }));
     }
+
+    Err(PromqlError::NotImplemented(format!(
+        "function not yet supported: {func_name}"
+    )))
 }
 
 /// Plan an aggregation expression (sum, avg, count, min, max).

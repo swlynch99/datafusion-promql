@@ -178,7 +178,6 @@ async fn test_ln_instant_query() {
             assert_eq!(samples.len(), 2, "expected 2 series");
             samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
-            // ln(30.0)
             let expected_host1 = 30.0_f64.ln();
             assert!(
                 (samples[0].value - expected_host1).abs() < 1e-10,
@@ -186,7 +185,6 @@ async fn test_ln_instant_query() {
                 samples[0].value
             );
 
-            // ln(70.0)
             let expected_host2 = 70.0_f64.ln();
             assert!(
                 (samples[1].value - expected_host2).abs() < 1e-10,
@@ -194,11 +192,73 @@ async fn test_ln_instant_query() {
                 samples[1].value
             );
 
-            // __name__ should be dropped
             assert!(
                 !samples[0].labels.contains_key("__name__"),
                 "ln() should drop __name__"
             );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_floor_instant_query() {
+    // Source with fractional values to exercise floor rounding.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("__name__", DataType::Utf8, false),
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new("value", DataType::Float64, false),
+        Field::new("instance", DataType::Utf8, false),
+        Field::new("job", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(vec![
+                "cpu_usage",
+                "cpu_usage",
+                "cpu_usage",
+            ])),
+            Arc::new(Int64Array::from(vec![1000_i64, 1000, 1000])),
+            Arc::new(Float64Array::from(vec![3.7, -1.2, 5.0])),
+            Arc::new(StringArray::from(vec!["host1", "host2", "host3"])),
+            Arc::new(StringArray::from(vec!["n", "n", "n"])),
+        ],
+    )
+    .unwrap();
+    let source = InMemoryMetricSource::new(schema, vec![batch]);
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    let ts = chrono::Utc.timestamp_millis_opt(1000).unwrap();
+    let result = engine.instant_query("floor(cpu_usage)", ts).await.unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 3);
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            assert!(
+                (samples[0].value - 3.0).abs() < f64::EPSILON,
+                "host1: {}",
+                samples[0].value
+            );
+
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
+            assert!(
+                (samples[1].value - (-2.0)).abs() < f64::EPSILON,
+                "host2: {}",
+                samples[1].value
+            );
+
+            assert_eq!(samples[2].labels.get("instance").unwrap(), "host3");
+            assert!(
+                (samples[2].value - 5.0).abs() < f64::EPSILON,
+                "host3: {}",
+                samples[2].value
+            );
+
+            assert!(samples[0].labels.get("__name__").is_none());
         }
         other => panic!("expected Vector result, got {other:?}"),
     }
