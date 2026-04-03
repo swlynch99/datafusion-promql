@@ -9,6 +9,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
@@ -100,6 +101,10 @@ impl ExecutionPlan for RangeVectorExec {
 
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

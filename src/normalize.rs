@@ -6,8 +6,9 @@ use crate::error::{PromqlError, Result};
 use crate::types::Labels;
 use arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
+use datafusion::common::Column;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::{cast, col, lit};
 
 /// A column that matched the requested metric, with its parsed labels.
@@ -106,14 +107,22 @@ pub(crate) fn normalize_wide_to_long(
     let all_label_keys: Vec<String> = all_label_keys.into_iter().collect();
 
     // Build one SELECT branch per matched column.
+    // Each branch gets a unique scan alias so the DataFusion optimizer does not
+    // collapse the identical table scans into a single one via CSE.
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
-    for mc in &matched {
+    for (idx, mc) in matched.iter().enumerate() {
         let mut exprs = vec![
             // Timestamp: cast to Int64 then divide to get milliseconds.
             (cast(col(mapping.timestamp_column.as_str()), DataType::Int64) / lit(1_000_000i64))
                 .alias("timestamp"),
             // Value: cast to Float64.
-            cast(col(mc.col_name.as_str()), DataType::Float64).alias("value"),
+            // Use Column::new_unqualified to bypass the SQL parser, which would
+            // strip anything after `/` from the column name.
+            cast(
+                Expr::Column(Column::new_unqualified(mc.col_name.as_str())),
+                DataType::Float64,
+            )
+            .alias("value"),
             // Metric name literal.
             lit(metric_name).alias("__name__"),
         ];
@@ -123,8 +132,11 @@ pub(crate) fn normalize_wide_to_long(
             exprs.push(lit(val).alias(key.as_str()));
         }
 
+        // Use a unique alias per branch so the optimizer treats each scan as
+        // distinct (avoids CSE merging identical-looking table scans).
+        let scan_alias = format!("{metric_name}_{idx}");
         let plan = LogicalPlanBuilder::scan_with_filters(
-            metric_name,
+            scan_alias,
             provider_as_source(Arc::clone(&provider)),
             None,
             vec![],

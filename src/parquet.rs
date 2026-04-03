@@ -161,6 +161,9 @@ pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
 /// "cgroup_cpu_cycles///1"                          → ("cgroup_cpu_cycles", {cgroup="/", id="1"})
 /// ```
 pub fn rezolus_parse_column(col_name: &str) -> Option<(String, Labels)> {
+    // Strip histogram suffix before parsing.
+    let col_name = col_name.strip_suffix(":buckets").unwrap_or(col_name);
+
     let mut labels = Labels::new();
 
     let Some(slash_pos) = col_name.find('/') else {
