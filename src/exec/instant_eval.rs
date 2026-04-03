@@ -12,7 +12,6 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-
 /// Physical plan node that aligns raw samples to evaluation timestamps
 /// using the lookback window.
 ///
