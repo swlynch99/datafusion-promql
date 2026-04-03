@@ -6,9 +6,9 @@ use promql_parser::parser::{self, Expr, LabelModifier};
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
-use crate::func::{lookup_aggregate_function, lookup_range_function};
+use crate::func::{lookup_aggregate_function, lookup_instant_function, lookup_range_function};
 use crate::node::{
-    AggregateEval, BinaryEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
+    AggregateEval, BinaryEval, InstantFnEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
     ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
@@ -141,6 +141,22 @@ async fn plan_call(
                 label_columns,
             )
         };
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(node),
+        }))
+    } else if let Some(instant_func) = lookup_instant_function(func_name) {
+        // Instant vector functions: expect exactly one vector argument.
+        if call.args.args.len() != 1 {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() requires exactly 1 argument, got {}",
+                call.args.args.len()
+            )));
+        }
+
+        let child_plan =
+            Box::pin(plan_expr(&call.args.args[0], source, time_range, params)).await?;
+        let node = InstantFnEval::new(child_plan, instant_func);
 
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
