@@ -91,6 +91,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
 impl PartialEq for InstantFuncEval {
     fn eq(&self, other: &Self) -> bool {
         match (self.func, other.func) {
+            (InstantFunction::Abs, InstantFunction::Abs) => true,
             (InstantFunction::Ceil, InstantFunction::Ceil) => true,
             (InstantFunction::Ln, InstantFunction::Ln) => true,
             (InstantFunction::Log2, InstantFunction::Log2) => true,
@@ -107,6 +108,7 @@ impl Eq for InstantFuncEval {}
 impl Hash for InstantFuncEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self.func {
+            InstantFunction::Abs => "abs".hash(state),
             InstantFunction::Ceil => "ceil".hash(state),
             InstantFunction::Ln => "ln".hash(state),
             InstantFunction::Log2 => "log2".hash(state),

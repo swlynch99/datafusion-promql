@@ -3,6 +3,8 @@ use std::fmt;
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum InstantFunction {
+    /// Absolute value of each sample value.
+    Abs,
     /// Round each sample value up to the nearest integer.
     Ceil,
     /// Natural logarithm of each sample value.
@@ -17,6 +19,7 @@ impl InstantFunction {
     /// Apply the function to a single sample value.
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
+            Self::Abs => value.abs(),
             Self::Ceil => value.ceil(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
@@ -36,6 +39,7 @@ impl InstantFunction {
 impl fmt::Display for InstantFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Abs => write!(f, "abs"),
             Self::Ceil => write!(f, "ceil"),
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
@@ -50,6 +54,7 @@ impl fmt::Display for InstantFunction {
 /// Returns `None` if the name is not a known instant function.
 pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<InstantFunction> {
     match name {
+        "abs" => Some(InstantFunction::Abs),
         "ceil" => Some(InstantFunction::Ceil),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
@@ -191,6 +196,39 @@ mod tests {
     }
 
     // --- log2 tests ---
+
+    #[test]
+    fn test_abs_positive() {
+        assert_eq!(InstantFunction::Abs.evaluate(3.5), 3.5);
+    }
+
+    #[test]
+    fn test_abs_negative() {
+        assert_eq!(InstantFunction::Abs.evaluate(-3.5), 3.5);
+    }
+
+    #[test]
+    fn test_abs_zero() {
+        assert_eq!(InstantFunction::Abs.evaluate(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_abs_large() {
+        assert_eq!(InstantFunction::Abs.evaluate(-1e300), 1e300);
+    }
+
+    #[test]
+    fn test_abs_nan_stays_nan() {
+        assert!(InstantFunction::Abs.evaluate(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_lookup_abs() {
+        assert!(matches!(
+            lookup_instant_function("abs", &[]),
+            Some(InstantFunction::Abs)
+        ));
+    }
 
     #[test]
     fn test_log2_power_of_two() {

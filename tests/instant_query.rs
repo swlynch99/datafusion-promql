@@ -196,7 +196,7 @@ async fn test_ln_instant_query() {
 
             // __name__ should be dropped
             assert!(
-                samples[0].labels.get("__name__").is_none(),
+                !samples[0].labels.contains_key("__name__"),
                 "ln() should drop __name__"
             );
         }
