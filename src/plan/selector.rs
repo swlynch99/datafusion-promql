@@ -1,3 +1,4 @@
+use arrow::datatypes::DataType;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Like, LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::*;
@@ -7,6 +8,22 @@ use promql_parser::parser::VectorSelector;
 use crate::datasource::{self, MetricSource, TableFormat};
 use crate::error::{PromqlError, Result};
 use crate::types::TimeRange;
+
+/// Create a timestamp literal that matches the timestamp column's data type.
+///
+/// The `timestamp` column may be either `UInt64` or `Int64` depending on the
+/// data source. This helper inspects the schema and produces a literal of the
+/// matching type so that DataFusion filter comparisons don't fail with a type
+/// mismatch.
+fn timestamp_lit(schema: &arrow::datatypes::Schema, value: i64) -> datafusion::prelude::Expr {
+    let ts_type = schema
+        .column_with_name("timestamp")
+        .map(|(_, f)| f.data_type().clone());
+    match ts_type {
+        Some(DataType::UInt64) => lit(value.max(0) as u64),
+        _ => lit(value),
+    }
+}
 
 /// Convert a promql-parser `Matcher` to a DataFusion filter expression.
 fn matcher_to_filter_expr(m: &Matcher) -> datafusion::logical_expr::Expr {
@@ -97,6 +114,8 @@ pub(crate) async fn plan_vector_selector(
         .table_for_metric(metric_name, &ds_matchers, expanded_range)
         .await?;
 
+    let provider_schema = provider.schema();
+
     match format {
         TableFormat::Wide(mapping) => {
             // Normalize wide format to long format via UNION ALL projections.
@@ -111,8 +130,11 @@ pub(crate) async fn plan_vector_selector(
             let plan = LogicalPlanBuilder::from(plan)
                 .filter(
                     col("timestamp")
-                        .gt_eq(lit(expanded_range.start_ms))
-                        .and(col("timestamp").lt_eq(lit(expanded_range.end_ms))),
+                        .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ms))
+                        .and(
+                            col("timestamp")
+                                .lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms)),
+                        ),
                 )
                 .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
                 .sort(vec![col("timestamp").sort(true, false)])
@@ -127,8 +149,7 @@ pub(crate) async fn plan_vector_selector(
 
     // Determine label columns from the provider schema.
     // In long format, label columns are everything except "timestamp", "value".
-    let schema = provider.schema();
-    let label_columns: Vec<String> = schema
+    let label_columns: Vec<String> = provider_schema
         .fields()
         .iter()
         .map(|f| f.name().clone())
@@ -152,8 +173,10 @@ pub(crate) async fn plan_vector_selector(
     let plan = plan
         .filter(
             col("timestamp")
-                .gt_eq(lit(expanded_range.start_ms))
-                .and(col("timestamp").lt_eq(lit(expanded_range.end_ms))),
+                .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ms))
+                .and(
+                    col("timestamp").lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ms)),
+                ),
         )
         .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
 
