@@ -6,9 +6,9 @@ use promql_parser::parser::{self, Expr, LabelModifier};
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
-use crate::func::{lookup_aggregate_function, lookup_range_function};
+use crate::func::{lookup_aggregate_function, lookup_instant_function, lookup_range_function};
 use crate::node::{
-    AggregateEval, BinaryEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
+    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
     ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
@@ -146,6 +146,37 @@ async fn plan_call(
             node: Arc::new(node),
         }))
     } else {
+        // Check if this is an instant vector function.
+        // The first argument is the instant vector; any remaining arguments are extra scalars.
+        let extra_scalar_args: Vec<f64> = call
+            .args
+            .args
+            .iter()
+            .skip(1)
+            .filter_map(|arg| {
+                if let Expr::NumberLiteral(lit) = arg.as_ref() {
+                    Some(lit.val)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if let Some(func) = lookup_instant_function(func_name, &extra_scalar_args) {
+            if call.args.args.is_empty() {
+                return Err(PromqlError::Plan(format!(
+                    "{func_name}() requires at least 1 argument"
+                )));
+            }
+            let vector_arg = &call.args.args[0];
+            let child_plan =
+                Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+            let node = InstantFuncEval::new(child_plan, func);
+            return Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(node),
+            }));
+        }
+
         Err(PromqlError::NotImplemented(format!(
             "function not yet supported: {func_name}"
         )))
