@@ -23,9 +23,9 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Evaluation timestamp in milliseconds (default: 0)
-    #[arg(short, long, default_value_t = 0)]
-    timestamp: i64,
+    /// Evaluation timestamp in milliseconds (omit for whole-range query)
+    #[arg(short, long)]
+    timestamp: Option<i64>,
 
     /// Show the logical plan
     #[arg(long)]
@@ -110,16 +110,30 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Parse and plan
     let expr = promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
 
-    let ts_ms = cli.timestamp;
-    let time_range = TimeRange {
-        start_ms: ts_ms,
-        end_ms: ts_ms,
-    };
-    let params = datafusion_promql::plan::EvalParams {
-        eval_ts_ms: Some(ts_ms),
-        start_ms: ts_ms,
-        end_ms: ts_ms,
-        step_ms: 1,
+    let (time_range, params) = if let Some(ts_ms) = cli.timestamp {
+        let time_range = TimeRange {
+            start_ms: ts_ms,
+            end_ms: ts_ms,
+        };
+        let params = datafusion_promql::plan::EvalParams {
+            eval_ts_ms: Some(ts_ms),
+            start_ms: ts_ms,
+            end_ms: ts_ms,
+            step_ms: 1,
+        };
+        (time_range, params)
+    } else {
+        let time_range = TimeRange {
+            start_ms: i64::MIN,
+            end_ms: i64::MAX,
+        };
+        let params = datafusion_promql::plan::EvalParams {
+            eval_ts_ms: None,
+            start_ms: i64::MIN,
+            end_ms: i64::MAX,
+            step_ms: 1,
+        };
+        (time_range, params)
     };
 
     let logical_plan =
