@@ -18,6 +18,8 @@ pub(crate) enum InstantFunction {
     Log10,
     /// Round each value to the nearest multiple of `to_nearest`.
     Round { to_nearest: f64 },
+    /// Returns the sign of each sample: -1 if negative, 0 if zero, 1 if positive.
+    Sgn,
     /// Square root of each sample value. Returns NaN for negative inputs.
     Sqrt,
 }
@@ -32,6 +34,7 @@ impl fmt::Display for InstantFunction {
             Self::Log2 => write!(f, "log2"),
             Self::Log10 => write!(f, "log10"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
+            Self::Sgn => write!(f, "sgn"),
             Self::Sqrt => write!(f, "sqrt"),
         }
     }
@@ -48,6 +51,17 @@ impl InstantFunction {
             Self::Log2 => value.log2(),
             Self::Log10 => value.log10(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
+            Self::Sgn => {
+                if value.is_nan() {
+                    f64::NAN
+                } else if value > 0.0 {
+                    1.0
+                } else if value < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
             Self::Sqrt => value.sqrt(),
         }
     }
@@ -74,6 +88,7 @@ impl PartialEq for InstantFunction {
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
+            (Self::Sgn, Self::Sgn) => true,
             (Self::Sqrt, Self::Sqrt) => true,
             _ => false,
         }
@@ -91,6 +106,7 @@ impl Hash for InstantFunction {
             | Self::Ln
             | Self::Log2
             | Self::Log10
+            | Self::Sgn
             | Self::Sqrt => {}
             Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
         }
@@ -113,6 +129,7 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
         }
+        "sgn" => Some(InstantFunction::Sgn),
         "sqrt" => Some(InstantFunction::Sqrt),
         _ => None,
     }
