@@ -3,6 +3,8 @@ use std::fmt;
 /// Instant vector functions that transform each sample value pointwise.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum InstantFunction {
+    /// Round each sample value up to the nearest integer.
+    Ceil,
     /// Natural logarithm of each sample value.
     Ln,
     /// Base-2 logarithm of each sample value.
@@ -15,6 +17,7 @@ impl InstantFunction {
     /// Apply the function to a single sample value.
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
+            Self::Ceil => value.ceil(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
@@ -33,6 +36,7 @@ impl InstantFunction {
 impl fmt::Display for InstantFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Ceil => write!(f, "ceil"),
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
@@ -46,6 +50,7 @@ impl fmt::Display for InstantFunction {
 /// Returns `None` if the name is not a known instant function.
 pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<InstantFunction> {
     match name {
+        "ceil" => Some(InstantFunction::Ceil),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
         "round" => {
@@ -71,6 +76,59 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- ceil tests ---
+
+    #[test]
+    fn test_ceil_positive_fractional() {
+        assert_eq!(InstantFunction::Ceil.evaluate(1.2), 2.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(0.1), 1.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(99.999), 100.0);
+    }
+
+    #[test]
+    fn test_ceil_exact_integer() {
+        assert_eq!(InstantFunction::Ceil.evaluate(1.0), 1.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(0.0), 0.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(42.0), 42.0);
+    }
+
+    #[test]
+    fn test_ceil_negative_fractional() {
+        // ceil(-1.2) = -1, ceil(-0.1) = 0
+        assert_eq!(InstantFunction::Ceil.evaluate(-1.2), -1.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(-0.1), 0.0);
+    }
+
+    #[test]
+    fn test_ceil_negative_exact_integer() {
+        assert_eq!(InstantFunction::Ceil.evaluate(-1.0), -1.0);
+        assert_eq!(InstantFunction::Ceil.evaluate(-42.0), -42.0);
+    }
+
+    #[test]
+    fn test_ceil_nan() {
+        assert!(InstantFunction::Ceil.evaluate(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_ceil_infinity() {
+        assert_eq!(InstantFunction::Ceil.evaluate(f64::INFINITY), f64::INFINITY);
+        assert_eq!(
+            InstantFunction::Ceil.evaluate(f64::NEG_INFINITY),
+            f64::NEG_INFINITY
+        );
+    }
+
+    #[test]
+    fn test_lookup_ceil() {
+        assert!(matches!(
+            lookup_instant_function("ceil", &[]),
+            Some(InstantFunction::Ceil)
+        ));
+    }
+
+    // --- ln tests ---
 
     #[test]
     fn test_ln_positive() {
@@ -132,6 +190,8 @@ mod tests {
         assert_eq!(InstantFunction::Ln.to_string(), "ln");
     }
 
+    // --- log2 tests ---
+
     #[test]
     fn test_log2_power_of_two() {
         assert!((InstantFunction::Log2.evaluate(1.0) - 0.0).abs() < f64::EPSILON);
@@ -165,6 +225,8 @@ mod tests {
             Some(InstantFunction::Log2)
         ));
     }
+
+    // --- round tests ---
 
     #[test]
     fn test_round_default_to_nearest_one() {

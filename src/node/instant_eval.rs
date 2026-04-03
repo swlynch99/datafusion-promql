@@ -6,6 +6,7 @@ use std::hash::{Hash, Hasher};
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
+
 /// Custom logical node that aligns raw samples to evaluation timestamps.
 ///
 /// For each step timestamp `t`, this node picks the most recent sample
