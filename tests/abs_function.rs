@@ -63,7 +63,10 @@ fn make_source_with_negatives() -> InMemorySource {
     )
     .expect("failed to create batch");
 
-    InMemorySource { schema, batches: vec![batch] }
+    InMemorySource {
+        schema,
+        batches: vec![batch],
+    }
 }
 
 #[tokio::test]
@@ -81,15 +84,27 @@ async fn test_abs_negates_negative_values() {
 
             // host=a: abs(-5.0) = 5.0
             assert_eq!(samples[0].labels.get("host").unwrap(), "a");
-            assert!((samples[0].value - 5.0).abs() < f64::EPSILON, "expected 5.0, got {}", samples[0].value);
+            assert!(
+                (samples[0].value - 5.0).abs() < f64::EPSILON,
+                "expected 5.0, got {}",
+                samples[0].value
+            );
 
             // host=b: abs(3.0) = 3.0 (unchanged)
             assert_eq!(samples[1].labels.get("host").unwrap(), "b");
-            assert!((samples[1].value - 3.0).abs() < f64::EPSILON, "expected 3.0, got {}", samples[1].value);
+            assert!(
+                (samples[1].value - 3.0).abs() < f64::EPSILON,
+                "expected 3.0, got {}",
+                samples[1].value
+            );
 
             // host=c: abs(0.0) = 0.0
             assert_eq!(samples[2].labels.get("host").unwrap(), "c");
-            assert!((samples[2].value - 0.0).abs() < f64::EPSILON, "expected 0.0, got {}", samples[2].value);
+            assert!(
+                (samples[2].value - 0.0).abs() < f64::EPSILON,
+                "expected 0.0, got {}",
+                samples[2].value
+            );
         }
         other => panic!("expected Vector result, got {other:?}"),
     }
@@ -157,7 +172,10 @@ async fn test_abs_range_query() {
     )
     .expect("failed to create batch");
 
-    let source = InMemorySource { schema, batches: vec![batch] };
+    let source = InMemorySource {
+        schema,
+        batches: vec![batch],
+    };
     let engine = PromqlEngine::new(Arc::new(source));
 
     let start = chrono::Utc.timestamp_millis_opt(1000).unwrap();
@@ -177,9 +195,18 @@ async fn test_abs_range_query() {
 
             // All values should be positive (absolute values of -10, -20, -30).
             let values: Vec<f64> = s.samples.iter().map(|(_, v)| *v).collect();
-            assert!((values[0] - 10.0).abs() < f64::EPSILON, "expected 10.0 at step 0");
-            assert!((values[1] - 20.0).abs() < f64::EPSILON, "expected 20.0 at step 1");
-            assert!((values[2] - 30.0).abs() < f64::EPSILON, "expected 30.0 at step 2");
+            assert!(
+                (values[0] - 10.0).abs() < f64::EPSILON,
+                "expected 10.0 at step 0"
+            );
+            assert!(
+                (values[1] - 20.0).abs() < f64::EPSILON,
+                "expected 20.0 at step 1"
+            );
+            assert!(
+                (values[2] - 30.0).abs() < f64::EPSILON,
+                "expected 30.0 at step 2"
+            );
         }
         other => panic!("expected Matrix result, got {other:?}"),
     }
