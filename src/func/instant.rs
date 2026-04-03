@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use arrow::array::AsArray;
 use arrow::datatypes::{DataType, Float64Type};
-use datafusion::functions::math::expr_fn;
-use datafusion::logical_expr::Expr;
 use datafusion::common::utils::take_function_args;
 use datafusion::common::{Result as DFResult, ScalarValue};
+use datafusion::functions::math::expr_fn;
+use datafusion::logical_expr::Expr;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
@@ -245,9 +245,9 @@ impl ScalarUDFImpl for PromqlRoundUdf {
         let to_nearest = self.to_nearest;
 
         match arg {
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(
-                ColumnarValue::Scalar(ScalarValue::Float64(Some(promql_round(v, to_nearest)))),
-            ),
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(promql_round(v, to_nearest))),
+            )),
             ColumnarValue::Array(array) => {
                 let result = array
                     .as_primitive::<Float64Type>()

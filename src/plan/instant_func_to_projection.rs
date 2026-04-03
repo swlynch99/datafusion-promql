@@ -47,10 +47,7 @@ impl OptimizerRule for InstantFuncToProjection {
             let name = field.name();
             let (qualifier, child_field) =
                 child_schema.qualified_field_with_name(None, name.as_str())?;
-            let col_expr = Expr::Column(datafusion::common::Column::from((
-                qualifier,
-                child_field,
-            )));
+            let col_expr = Expr::Column(datafusion::common::Column::from((qualifier, child_field)));
 
             if name == "value" {
                 // Apply the instant function to the value column.
@@ -64,9 +61,7 @@ impl OptimizerRule for InstantFuncToProjection {
             }
         }
 
-        let new_plan = LogicalPlanBuilder::from(child)
-            .project(exprs)?
-            .build()?;
+        let new_plan = LogicalPlanBuilder::from(child).project(exprs)?.build()?;
 
         Ok(Transformed::yes(new_plan))
     }
