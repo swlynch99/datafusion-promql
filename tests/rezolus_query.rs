@@ -17,12 +17,12 @@ use chrono::TimeZone;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 
+use datafusion_promql::PromqlEngine;
 use datafusion_promql::datasource::{
     ColumnMapping, Matcher, MetricMeta, MetricSource, TableFormat,
 };
 use datafusion_promql::parquet::{rezolus_column_mapping, rezolus_parse_column};
 use datafusion_promql::types::{QueryResult, TimeRange};
-use datafusion_promql::PromqlEngine;
 
 // ---------------------------------------------------------------------------
 // Test helper: RezolusMockSource
@@ -90,8 +90,8 @@ impl RezolusMockBuilder {
             arrays.push(Arc::new(Float64Array::from(values.clone())));
         }
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)
-            .expect("failed to build RecordBatch");
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), arrays).expect("failed to build RecordBatch");
 
         // Build metric metadata from columns.
         let mapping = rezolus_column_mapping();
@@ -172,10 +172,7 @@ fn sorted_vector(result: QueryResult) -> Vec<(std::collections::BTreeMap<String,
     match result {
         QueryResult::Vector(mut samples) => {
             samples.sort_by(|a, b| a.labels.cmp(&b.labels));
-            samples
-                .into_iter()
-                .map(|s| (s.labels, s.value))
-                .collect()
+            samples.into_iter().map(|s| (s.labels, s.value)).collect()
         }
         other => panic!("expected Vector, got {other:?}"),
     }
@@ -630,10 +627,7 @@ async fn test_range_query_rate_rezolus() {
     // All rate values should be ~100.0 (linear counter).
     for &(_, val) in &read_series.samples {
         if !val.is_nan() {
-            assert!(
-                (val - 100.0).abs() < 5.0,
-                "expected rate ~100, got {val}"
-            );
+            assert!((val - 100.0).abs() < 5.0, "expected rate ~100, got {val}");
         }
     }
 }
@@ -658,10 +652,7 @@ fn make_multi_series_source() -> RezolusMockSource {
             (0..6).map(|i| (i * 20) as f64).collect(),
         )
         // softirq/net_tx/0 grows at 5/sec
-        .column(
-            "softirq/net_tx/0",
-            (0..6).map(|i| (i * 5) as f64).collect(),
-        )
+        .column("softirq/net_tx/0", (0..6).map(|i| (i * 5) as f64).collect())
         .build()
 }
 
@@ -859,10 +850,7 @@ async fn test_vector_scalar_addition() {
         .build();
 
     let e = engine(source);
-    let result = e
-        .instant_query("cpu_cores + 10", ts(3000))
-        .await
-        .unwrap();
+    let result = e.instant_query("cpu_cores + 10", ts(3000)).await.unwrap();
 
     let samples = sorted_vector(result);
     assert_eq!(samples.len(), 1);
@@ -932,7 +920,10 @@ async fn test_multiple_independent_metrics() {
 
     let bio = e.instant_query("blockio_bytes", ts(3000)).await.unwrap();
     assert_eq!(sorted_vector(bio).len(), 1);
-    assert_eq!(sorted_vector(e.instant_query("blockio_bytes", ts(3000)).await.unwrap())[0].1, 300.0);
+    assert_eq!(
+        sorted_vector(e.instant_query("blockio_bytes", ts(3000)).await.unwrap())[0].1,
+        300.0
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -990,10 +981,7 @@ async fn test_range_query_plain_selector() {
     // Rate of a counter growing at 10/sec should be ~10.
     for &(_, val) in &series[0].samples {
         if !val.is_nan() {
-            assert!(
-                (val - 10.0).abs() < 1.0,
-                "expected rate ~10, got {val}"
-            );
+            assert!((val - 10.0).abs() < 1.0, "expected rate ~10, got {val}");
         }
     }
 }
@@ -1097,10 +1085,7 @@ async fn test_sum_rate_cgroup_by_cgroup() {
 
     let e = engine(source);
     let result = e
-        .instant_query(
-            "sum(rate(cgroup_cpu_cycles[5s])) by (cgroup)",
-            ts(15000),
-        )
+        .instant_query("sum(rate(cgroup_cpu_cycles[5s])) by (cgroup)", ts(15000))
         .await
         .unwrap();
 
