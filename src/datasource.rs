@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 
 use crate::error::Result;
 use crate::types::{Labels, TimeRange};
 
-/// Parser function that converts a column name into `(metric_name, labels)`.
+/// Parser function that converts a column field into `(metric_name, labels)`.
 /// Returns `None` if the column should be skipped.
-pub type ColumnParser = Arc<dyn Fn(&str) -> Option<(String, Labels)> + Send + Sync>;
+pub type ColumnParser = Arc<dyn Fn(&Field) -> Option<(String, Labels)> + Send + Sync>;
 
 /// Describes the format of the table returned by a [`MetricSource`].
 #[derive(Debug, Clone)]
@@ -27,14 +27,14 @@ pub enum TableFormat {
     Wide(ColumnMapping),
 }
 
-/// Describes how to parse wide-format column names into metric name + labels.
+/// Describes how to parse wide-format column fields into metric name + labels.
 #[derive(Clone)]
 pub struct ColumnMapping {
     /// Column name for the timestamp. Defaults to "timestamp".
     pub timestamp_column: String,
     /// Columns to ignore (not metrics). E.g. `["duration"]`.
     pub ignore_columns: Vec<String>,
-    /// A function that parses a column name into `(metric_name, labels)`.
+    /// A function that parses a column field into `(metric_name, labels)`.
     /// Returns `None` if the column should be skipped.
     pub parse_column: ColumnParser,
 }
