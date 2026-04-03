@@ -254,12 +254,18 @@ mod tests {
     fn test_cgroup_labels_from_metadata() {
         let mut meta = HashMap::new();
         meta.insert("metric".to_string(), "cgroup_cpu_cycles".to_string());
-        meta.insert("cgroup".to_string(), "/system.slice/chrony.service".to_string());
+        meta.insert(
+            "cgroup".to_string(),
+            "/system.slice/chrony.service".to_string(),
+        );
         meta.insert("id".to_string(), "28".to_string());
         let field = make_field("cgroup_cpu_cycles//system.slice/chrony.service/28", meta);
         let (name, labels) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "cgroup_cpu_cycles");
-        assert_eq!(labels.get("cgroup").unwrap(), "/system.slice/chrony.service");
+        assert_eq!(
+            labels.get("cgroup").unwrap(),
+            "/system.slice/chrony.service"
+        );
         assert_eq!(labels.get("id").unwrap(), "28");
     }
 }
