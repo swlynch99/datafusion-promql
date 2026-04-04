@@ -54,12 +54,8 @@ impl SortFunctionKind {
         match self {
             Self::Sort => SortFunction::Sort,
             Self::SortDesc => SortFunction::SortDesc,
-            Self::SortByLabel => SortFunction::SortByLabel {
-                labels: label_args,
-            },
-            Self::SortByLabelDesc => SortFunction::SortByLabelDesc {
-                labels: label_args,
-            },
+            Self::SortByLabel => SortFunction::SortByLabel { labels: label_args },
+            Self::SortByLabelDesc => SortFunction::SortByLabelDesc { labels: label_args },
         }
     }
 

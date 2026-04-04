@@ -114,10 +114,7 @@ async fn test_sort_desc_by_value() {
     let engine = PromqlEngine::new(Arc::new(source));
     let ts = chrono::Utc.timestamp_millis_opt(1000).unwrap();
 
-    let result = engine
-        .instant_query("sort_desc(metric)", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("sort_desc(metric)", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {
