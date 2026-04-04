@@ -19,11 +19,11 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 pub(crate) struct StepVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
-    pub start_ns: i64,
-    pub end_ns: i64,
-    pub step_ns: i64,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub step_ns: u64,
     /// Lookback window in nanoseconds.
-    pub lookback_ns: i64,
+    pub lookback_ns: u64,
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
     pub offset_ns: i64,
     /// Label column names used for grouping series (excludes timestamp/value).
@@ -33,10 +33,10 @@ pub(crate) struct StepVectorEval {
 impl StepVectorEval {
     pub fn new(
         input: LogicalPlan,
-        start_ns: i64,
-        end_ns: i64,
-        step_ns: i64,
-        lookback_ns: i64,
+        start_ns: u64,
+        end_ns: u64,
+        step_ns: u64,
+        lookback_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {

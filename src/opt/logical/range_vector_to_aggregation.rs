@@ -86,7 +86,7 @@ impl OptimizerRule for RangeVectorToAggregation {
 
         // Step 2: Create a Values scan for the evaluation timestamps.
         let values_schema = Arc::new(DFSchema::from_unqualified_fields(
-            vec![Field::new("eval_ts", DataType::Int64, false)].into(),
+            vec![Field::new("eval_ts", DataType::UInt64, false)].into(),
             std::collections::HashMap::new(),
         )?);
         let values_rows: Vec<Vec<Expr>> = eval_timestamps.iter().map(|ts| vec![lit(*ts)]).collect();
@@ -102,10 +102,11 @@ impl OptimizerRule for RangeVectorToAggregation {
 
         // Step 4: Filter to keep only samples within the range window
         // [eval_ts - range_ns, eval_ts] for each evaluation timestamp.
+        // Use sample_ts + range_ns >= eval_ts to avoid unsigned underflow.
         let filtered = LogicalPlanBuilder::from(cross_joined)
             .filter(
-                col("sample_ts")
-                    .gt_eq(col("eval_ts") - lit(range_ns))
+                (col("sample_ts") + lit(range_ns))
+                    .gt_eq(col("eval_ts"))
                     .and(col("sample_ts").lt_eq(col("eval_ts"))),
             )?
             .build()?;
@@ -166,11 +167,11 @@ impl OptimizerRule for RangeVectorToAggregation {
 
 /// Generate the list of evaluation timestamps from the node parameters.
 fn generate_eval_timestamps(
-    eval_ts_ns: Option<i64>,
-    start_ns: i64,
-    end_ns: i64,
-    step_ns: i64,
-) -> Vec<i64> {
+    eval_ts_ns: Option<u64>,
+    start_ns: u64,
+    end_ns: u64,
+    step_ns: u64,
+) -> Vec<u64> {
     if let Some(ts) = eval_ts_ns {
         return vec![ts];
     }

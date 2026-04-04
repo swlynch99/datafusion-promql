@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ impl MetricSource for InMemorySource {
 fn make_source() -> InMemorySource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("host", DataType::Utf8, false),
         Field::new("env", DataType::Utf8, false),
@@ -57,7 +57,7 @@ fn make_source() -> InMemorySource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["metric", "metric", "metric"])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 1_000_000_000,
                 1_000_000_000,
                 1_000_000_000,
@@ -216,7 +216,7 @@ async fn test_sort_by_label_desc() {
 async fn test_sort_by_multiple_labels() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("env", DataType::Utf8, false),
         Field::new("host", DataType::Utf8, false),
@@ -229,7 +229,7 @@ async fn test_sort_by_multiple_labels() {
             Arc::new(StringArray::from(vec![
                 "metric", "metric", "metric", "metric",
             ])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 1_000_000_000,
                 1_000_000_000,
                 1_000_000_000,
@@ -282,7 +282,7 @@ async fn test_sort_by_multiple_labels() {
 async fn test_sort_range_query() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("host", DataType::Utf8, false),
     ]));
@@ -293,7 +293,7 @@ async fn test_sort_range_query() {
             Arc::new(StringArray::from(vec![
                 "metric", "metric", "metric", "metric", "metric", "metric",
             ])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 1_000_000_000,
                 1_000_000_000,
                 1_000_000_000,

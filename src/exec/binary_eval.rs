@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int64Builder, StringBuilder};
+use arrow::array::{Float64Builder, StringBuilder, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
@@ -17,7 +17,7 @@ use crate::node::{BinaryOp, VectorMatching};
 /// A series key is a vector of label values identifying a unique series.
 type SeriesKey = Vec<String>;
 /// Maps a series key to its (timestamp, value) samples.
-type SeriesMap = HashMap<SeriesKey, Vec<(i64, f64)>>;
+type SeriesMap = HashMap<SeriesKey, Vec<(u64, f64)>>;
 /// Maps a matching key to the list of full series keys that share it.
 type MatchKeyMap = HashMap<SeriesKey, Vec<SeriesKey>>;
 
@@ -143,8 +143,8 @@ fn collect_series(
             .column_by_name("timestamp")
             .expect("missing timestamp")
             .as_any()
-            .downcast_ref::<arrow::array::Int64Array>()
-            .expect("timestamp must be Int64");
+            .downcast_ref::<arrow::array::UInt64Array>()
+            .expect("timestamp must be UInt64");
         let val_arr = batch
             .column_by_name("value")
             .expect("missing value")
@@ -290,7 +290,7 @@ impl ExecutionPlan for BinaryExec {
             let (rhs_series, rhs_match_to_full) =
                 collect_series(&rhs_batches, &rhs_label_columns, &matching);
 
-            let mut out_ts = Int64Builder::new();
+            let mut out_ts = UInt64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 output_labels.iter().map(|_| StringBuilder::new()).collect();
@@ -386,7 +386,7 @@ impl ExecutionPlan for BinaryExec {
             } else {
                 // Arithmetic and comparison operators: match per timestamp.
                 // Build timestamp-indexed maps for RHS.
-                let mut rhs_by_match_and_ts: HashMap<SeriesKey, HashMap<i64, (f64, SeriesKey)>> =
+                let mut rhs_by_match_and_ts: HashMap<SeriesKey, HashMap<u64, (f64, SeriesKey)>> =
                     HashMap::new();
 
                 for (mk, rhs_keys) in &rhs_match_to_full {
@@ -587,7 +587,7 @@ impl ExecutionPlan for ScalarBinaryExec {
                 batches.push(b?);
             }
 
-            let mut out_ts = Int64Builder::new();
+            let mut out_ts = UInt64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels_builders: Vec<StringBuilder> =
                 output_labels.iter().map(|_| StringBuilder::new()).collect();
@@ -597,8 +597,8 @@ impl ExecutionPlan for ScalarBinaryExec {
                     .column_by_name("timestamp")
                     .expect("missing timestamp")
                     .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .expect("timestamp must be Int64");
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .expect("timestamp must be UInt64");
                 let val_arr = batch
                     .column_by_name("value")
                     .expect("missing value")

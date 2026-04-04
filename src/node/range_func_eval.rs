@@ -39,7 +39,7 @@ fn compute_output_schema(input: &LogicalPlan) -> Result<DFSchemaRef> {
     for field in input_schema.fields() {
         let name = field.name().as_str();
         match name {
-            "timestamp" => fields.push(Field::new("timestamp", DataType::Int64, false)),
+            "timestamp" => fields.push(Field::new("timestamp", DataType::UInt64, false)),
             "timestamps" | "values" => {
                 // Skip the list columns; we'll add a scalar "value" column.
             }

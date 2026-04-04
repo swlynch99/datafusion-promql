@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -50,7 +50,7 @@ impl MetricSource for InMemoryMetricSource {
 fn make_sgn_test_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -60,8 +60,8 @@ fn make_sgn_test_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["metric", "metric", "metric"])),
-            Arc::new(Int64Array::from(vec![
-                1_000_000_000_i64,
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
                 1_000_000_000,
                 1_000_000_000,
             ])),
@@ -77,7 +77,7 @@ fn make_sgn_test_source() -> InMemoryMetricSource {
 fn make_test_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -98,7 +98,7 @@ fn make_test_source() -> InMemoryMetricSource {
                 "cpu_usage",
                 "cpu_usage",
             ])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 // Series 1: instance=host1 at t=1000, 2000, 3000, 4000
                 1_000_000_000,
                 2_000_000_000,
@@ -305,7 +305,7 @@ async fn test_floor_instant_query() {
     // Source with fractional values to exercise floor rounding.
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -318,8 +318,8 @@ async fn test_floor_instant_query() {
                 "cpu_usage",
                 "cpu_usage",
             ])),
-            Arc::new(Int64Array::from(vec![
-                1_000_000_000_i64,
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
                 1_000_000_000,
                 1_000_000_000,
             ])),
@@ -435,7 +435,7 @@ async fn test_instant_query_with_label_filter() {
 fn make_fractional_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -448,7 +448,10 @@ fn make_fractional_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["cpu_usage", "cpu_usage"])),
-            Arc::new(Int64Array::from(vec![3_000_000_000_i64, 3_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                3_000_000_000_u64,
+                3_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![1.2_f64, -1.7_f64])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
             Arc::new(StringArray::from(vec!["node_exporter", "node_exporter"])),

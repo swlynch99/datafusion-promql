@@ -67,7 +67,7 @@ impl PromqlPlanner {
         let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
         let ts_ns = timestamp
             .timestamp_nanos_opt()
-            .expect("timestamp out of range for nanoseconds");
+            .expect("timestamp out of range for nanoseconds") as u64;
         let time_range = TimeRange {
             start_ns: Some(ts_ns),
             end_ns: Some(ts_ns),
@@ -92,11 +92,11 @@ impl PromqlPlanner {
         let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
         let start_ns = start
             .timestamp_nanos_opt()
-            .expect("start timestamp out of range for nanoseconds");
+            .expect("start timestamp out of range for nanoseconds") as u64;
         let end_ns = end
             .timestamp_nanos_opt()
-            .expect("end timestamp out of range for nanoseconds");
-        let step_ns = step.as_nanos() as i64;
+            .expect("end timestamp out of range for nanoseconds") as u64;
+        let step_ns = step.as_nanos() as u64;
         let time_range = TimeRange {
             start_ns: Some(start_ns),
             end_ns: Some(end_ns),
@@ -184,7 +184,7 @@ impl PromqlPlanner {
     ///
     /// Rows are grouped by their label set and collected as `(timestamp, value)` pairs.
     pub fn batches_to_matrix(batches: &[arrow::record_batch::RecordBatch]) -> Result<QueryResult> {
-        let mut series_map: BTreeMap<Labels, Vec<(i64, f64)>> = BTreeMap::new();
+        let mut series_map: BTreeMap<Labels, Vec<(u64, f64)>> = BTreeMap::new();
 
         for batch in batches {
             for row in 0..batch.num_rows() {
@@ -254,7 +254,7 @@ impl PromqlEngine {
 }
 
 /// Extract labels and sample data from a batch for a given row.
-fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(i64, f64, Labels)> {
+fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(u64, f64, Labels)> {
     let ts_col = batch.column_by_name("timestamp").ok_or_else(|| {
         PromqlError::Execution(datafusion::error::DataFusionError::Internal(
             "missing timestamp column".into(),
@@ -268,10 +268,10 @@ fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(
 
     let ts_arr = ts_col
         .as_any()
-        .downcast_ref::<arrow::array::Int64Array>()
+        .downcast_ref::<arrow::array::UInt64Array>()
         .ok_or_else(|| {
             PromqlError::Execution(datafusion::error::DataFusionError::Internal(
-                "timestamp must be Int64".into(),
+                "timestamp must be UInt64".into(),
             ))
         })?;
     let val_arr = val_col

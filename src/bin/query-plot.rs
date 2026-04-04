@@ -105,8 +105,8 @@ fn plot_matrix(
     }
 
     // Compute global min/max timestamps to use as x-axis bounds.
-    let mut ts_min = i64::MAX;
-    let mut ts_max = i64::MIN;
+    let mut ts_min = u64::MAX;
+    let mut ts_max = u64::MIN;
 
     for s in series {
         for &(ts, _) in &s.samples {
@@ -116,7 +116,7 @@ fn plot_matrix(
     }
 
     // Convert to seconds offset from ts_min for f32 plotting.
-    let ts_to_x = |ts: i64| -> f32 { ((ts - ts_min) as f64 / 1e9) as f32 };
+    let ts_to_x = |ts: u64| -> f32 { ((ts - ts_min) as f64 / 1e9) as f32 };
     let x_max = ts_to_x(ts_max);
 
     println!("{query}");
@@ -148,8 +148,8 @@ fn plot_matrix(
     c.nice();
 
     // Print time range.
-    let dt_min = DateTime::from_timestamp_nanos(ts_min);
-    let dt_max = DateTime::from_timestamp_nanos(ts_max);
+    let dt_min = DateTime::from_timestamp_nanos(ts_min as i64);
+    let dt_max = DateTime::from_timestamp_nanos(ts_max as i64);
     println!(
         "  x: {:.1}s  [{} .. {}]",
         x_max,
@@ -235,28 +235,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
-    const NS_PER_SEC: i64 = 1_000_000_000;
+    const NS_PER_SEC: u64 = 1_000_000_000;
 
     if let Some(ts_secs) = cli.timestamp {
         // Instant query.
-        let ts = DateTime::from_timestamp_nanos(ts_secs * NS_PER_SEC);
+        let ts = DateTime::from_timestamp_nanos((ts_secs as u64 * NS_PER_SEC) as i64);
         eprintln!("Executing instant query at {ts}...");
         let result = engine.instant_query(&cli.query, ts).await?;
         plot_vector(&result, &cli.query, width, height)?;
     } else if cli.start.is_some() || cli.end.is_some() {
         // Range query: fill in missing bounds from parquet metadata.
-        let start_ns = cli.start.map(|s| s * NS_PER_SEC).unwrap_or(auto_min_ns);
-        let end_ns = cli.end.map(|e| e * NS_PER_SEC).unwrap_or(auto_max_ns);
-        let start = DateTime::from_timestamp_nanos(start_ns);
-        let end = DateTime::from_timestamp_nanos(end_ns);
+        let start_ns = cli
+            .start
+            .map(|s| s as u64 * NS_PER_SEC)
+            .unwrap_or(auto_min_ns);
+        let end_ns = cli
+            .end
+            .map(|e| e as u64 * NS_PER_SEC)
+            .unwrap_or(auto_max_ns);
+        let start = DateTime::from_timestamp_nanos(start_ns as i64);
+        let end = DateTime::from_timestamp_nanos(end_ns as i64);
         let step = std::time::Duration::from_secs(cli.step);
         eprintln!("Executing range query [{start} .. {end}] step {step:?}...");
         let result = engine.range_query(&cli.query, start, end, step).await?;
         plot_matrix(&result, &cli.query, width, height)?;
     } else {
         // No timestamp flags: default to range query over the full data.
-        let start = DateTime::from_timestamp_nanos(auto_min_ns);
-        let end = DateTime::from_timestamp_nanos(auto_max_ns);
+        let start = DateTime::from_timestamp_nanos(auto_min_ns as i64);
+        let end = DateTime::from_timestamp_nanos(auto_max_ns as i64);
         let step = std::time::Duration::from_secs(cli.step);
         eprintln!("No timestamps specified; using range from parquet metadata: [{start} .. {end}]");
         let result = engine.range_query(&cli.query, start, end, step).await?;

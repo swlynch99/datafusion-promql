@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -44,7 +44,7 @@ impl MetricSource for InMemorySource {
 fn make_source_with_negatives() -> InMemorySource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("host", DataType::Utf8, false),
     ]));
@@ -56,7 +56,7 @@ fn make_source_with_negatives() -> InMemorySource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 1_000_000_000,
                 1_000_000_000,
                 1_000_000_000,
@@ -160,7 +160,7 @@ async fn test_abs_preserves_other_labels() {
 async fn test_abs_range_query() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("host", DataType::Utf8, false),
     ]));
@@ -169,7 +169,7 @@ async fn test_abs_range_query() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 1_000_000_000,
                 2_000_000_000,
                 3_000_000_000,

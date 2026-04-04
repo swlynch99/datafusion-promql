@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -48,7 +48,7 @@ impl MetricSource for InMemoryMetricSource {
 fn make_pow2_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -57,7 +57,10 @@ fn make_pow2_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["mem_pages", "mem_pages"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                1_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![8.0, 1024.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -107,7 +110,7 @@ async fn test_log2_instant_query() {
 async fn test_log2_range_query() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -117,7 +120,10 @@ async fn test_log2_range_query() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["mem_pages", "mem_pages"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 2_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                2_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![4.0, 16.0])),
             Arc::new(StringArray::from(vec!["host1", "host1"])),
         ],

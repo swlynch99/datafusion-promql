@@ -2,8 +2,8 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{AsArray, Float64Builder, Int64Builder, StringBuilder};
-use arrow::datatypes::{DataType, Field, Float64Type, Int64Type, Schema, SchemaRef};
+use arrow::array::{AsArray, Float64Builder, StringBuilder, UInt64Builder};
+use arrow::datatypes::{DataType, Field, Float64Type, Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -16,7 +16,7 @@ use crate::func::RangeFunction;
 
 /// Physical plan node that applies a range function to pre-windowed data.
 ///
-/// Consumes batches with `timestamp` (Int64), `timestamps` (List<Int64>),
+/// Consumes batches with `timestamp` (UInt64), `timestamps` (List<UInt64>),
 /// `values` (List<Float64>), and label columns. For each row, applies the
 /// range function to the (timestamps, values) arrays and outputs a scalar
 /// result.
@@ -32,7 +32,7 @@ pub(crate) struct RangeFunctionExec {
 /// Build the output schema: timestamp, value, label columns.
 fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
     let mut fields = vec![
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, true),
     ];
     for label in label_columns {
@@ -126,7 +126,7 @@ impl ExecutionPlan for RangeFunctionExec {
                 batches.push(batch_result?);
             }
 
-            let mut out_ts = Int64Builder::new();
+            let mut out_ts = UInt64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
@@ -144,8 +144,8 @@ impl ExecutionPlan for RangeFunctionExec {
 
                 let ts_arr = ts_col
                     .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .expect("timestamp must be Int64");
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .expect("timestamp must be UInt64");
 
                 let timestamps_list = timestamps_col.as_list::<i32>();
                 let values_list = values_col.as_list::<i32>();
@@ -166,11 +166,11 @@ impl ExecutionPlan for RangeFunctionExec {
                     // Extract the window arrays for this row.
                     let ts_list = timestamps_list.value(row);
                     let val_list = values_list.value(row);
-                    let window_ts = ts_list.as_primitive::<Int64Type>();
+                    let window_ts = ts_list.as_primitive::<UInt64Type>();
                     let window_val = val_list.as_primitive::<Float64Type>();
 
                     // Build the (timestamp, value) pairs for the function.
-                    let samples: Vec<(i64, f64)> = window_ts
+                    let samples: Vec<(u64, f64)> = window_ts
                         .values()
                         .iter()
                         .zip(window_val.values().iter())

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -45,7 +45,7 @@ impl MetricSource for InMemoryMetricSource {
 fn make_trig_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -54,10 +54,10 @@ fn make_trig_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![
-                1_000_000_000_i64,
-                1_000_000_000_i64,
-                1_000_000_000_i64,
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                1_000_000_000_u64,
+                1_000_000_000_u64,
             ])),
             Arc::new(Float64Array::from(vec![0.0, 1.0, -1.0])),
             Arc::new(StringArray::from(vec!["host1", "host2", "host3"])),
@@ -221,7 +221,7 @@ async fn test_acosh() {
     // acosh is only defined for values >= 1, so use a special source.
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -230,7 +230,10 @@ async fn test_acosh() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                1_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![1.0, 2.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -265,7 +268,7 @@ async fn test_deg() {
     // deg converts radians to degrees
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -275,7 +278,10 @@ async fn test_deg() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                1_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![pi, pi / 2.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -298,7 +304,7 @@ async fn test_rad() {
     // rad converts degrees to radians
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -307,7 +313,10 @@ async fn test_rad() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                1_000_000_000_u64,
+                1_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![180.0, 90.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],

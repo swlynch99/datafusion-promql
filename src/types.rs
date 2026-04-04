@@ -7,15 +7,15 @@ pub type Labels = BTreeMap<String, String>;
 pub const METRIC_NAME_LABEL: &str = "__name__";
 
 /// Default lookback window in nanoseconds (5 minutes).
-pub const DEFAULT_LOOKBACK_NS: i64 = 300_000_000_000;
+pub const DEFAULT_LOOKBACK_NS: u64 = 300_000_000_000;
 
 /// A time range in nanoseconds since epoch.
 ///
 /// When a bound is `None`, no constraint is applied on that side.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeRange {
-    pub start_ns: Option<i64>,
-    pub end_ns: Option<i64>,
+    pub start_ns: Option<u64>,
+    pub end_ns: Option<u64>,
 }
 
 impl TimeRange {
@@ -36,16 +36,16 @@ pub enum QueryResult {
     /// Range query result: a matrix of sample ranges per series.
     Matrix(Vec<RangeSamples>),
     /// A scalar value with its timestamp.
-    Scalar(f64, i64),
+    Scalar(f64, u64),
     /// A string value with its timestamp.
-    String(String, i64),
+    String(String, u64),
 }
 
 /// A single sample from an instant vector.
 #[derive(Debug, Clone)]
 pub struct InstantSample {
     pub labels: Labels,
-    pub timestamp_ns: i64,
+    pub timestamp_ns: u64,
     pub value: f64,
 }
 
@@ -53,5 +53,5 @@ pub struct InstantSample {
 #[derive(Debug, Clone)]
 pub struct RangeSamples {
     pub labels: Labels,
-    pub samples: Vec<(i64, f64)>,
+    pub samples: Vec<(u64, f64)>,
 }

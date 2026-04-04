@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -49,14 +49,14 @@ impl MetricSource for InMemoryMetricSource {
 fn make_source(values: Vec<f64>) -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
 
     let n = values.len();
     let names: Vec<&str> = (0..n).map(|_| "cpu_usage").collect();
-    let timestamps: Vec<i64> = (0..n).map(|_| 1_000_000_000).collect();
+    let timestamps: Vec<u64> = (0..n).map(|_| 1_000_000_000).collect();
     let instances: Vec<String> = (0..n).map(|i| format!("host{}", i + 1)).collect();
     let instance_refs: Vec<&str> = instances.iter().map(|s| s.as_str()).collect();
 
@@ -64,7 +64,7 @@ fn make_source(values: Vec<f64>) -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(instance_refs)),
         ],

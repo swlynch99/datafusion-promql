@@ -313,7 +313,7 @@ fn compute_binary_output_schema(
     };
 
     let mut fields = vec![
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
     ];
     for label in &output_labels {
