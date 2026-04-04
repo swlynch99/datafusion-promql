@@ -20,6 +20,19 @@ pub(crate) enum InstantFunction {
     Atanh,
     /// Round each sample value up to the nearest integer.
     Ceil,
+    /// Clamp each sample value to the range `[min, max]`.
+    Clamp {
+        min: f64,
+        max: f64,
+    },
+    /// Clamp each sample value to have a maximum of the given scalar.
+    ClampMax {
+        max: f64,
+    },
+    /// Clamp each sample value to have a minimum of the given scalar.
+    ClampMin {
+        min: f64,
+    },
     /// Cosine of each sample value (radians).
     Cos,
     /// Hyperbolic cosine of each sample value.
@@ -66,6 +79,9 @@ impl fmt::Display for InstantFunction {
             Self::Atan => write!(f, "atan"),
             Self::Atanh => write!(f, "atanh"),
             Self::Ceil => write!(f, "ceil"),
+            Self::Clamp { min, max } => write!(f, "clamp(min={min}, max={max})"),
+            Self::ClampMax { max } => write!(f, "clamp_max(max={max})"),
+            Self::ClampMin { min } => write!(f, "clamp_min(min={min})"),
             Self::Cos => write!(f, "cos"),
             Self::Cosh => write!(f, "cosh"),
             Self::Deg => write!(f, "deg"),
@@ -99,6 +115,9 @@ impl InstantFunction {
             Self::Atan => value.atan(),
             Self::Atanh => value.atanh(),
             Self::Ceil => value.ceil(),
+            Self::Clamp { min, max } => super::udf::promql_clamp(value, *min, *max),
+            Self::ClampMax { max } => value.min(*max),
+            Self::ClampMin { min } => value.max(*min),
             Self::Cos => value.cos(),
             Self::Cosh => value.cosh(),
             Self::Deg => value.to_degrees(),
@@ -165,6 +184,11 @@ impl PartialEq for InstantFunction {
             | (Self::Sqrt, Self::Sqrt)
             | (Self::Tan, Self::Tan)
             | (Self::Tanh, Self::Tanh) => true,
+            (Self::Clamp { min: a1, max: a2 }, Self::Clamp { min: b1, max: b2 }) => {
+                a1.to_bits() == b1.to_bits() && a2.to_bits() == b2.to_bits()
+            }
+            (Self::ClampMax { max: a }, Self::ClampMax { max: b }) => a.to_bits() == b.to_bits(),
+            (Self::ClampMin { min: a }, Self::ClampMin { min: b }) => a.to_bits() == b.to_bits(),
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
@@ -177,8 +201,15 @@ impl Eq for InstantFunction {}
 impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        if let Self::Round { to_nearest } = self {
-            to_nearest.to_bits().hash(state);
+        match self {
+            Self::Clamp { min, max } => {
+                min.to_bits().hash(state);
+                max.to_bits().hash(state);
+            }
+            Self::ClampMax { max } => max.to_bits().hash(state),
+            Self::ClampMin { min } => min.to_bits().hash(state),
+            Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
+            _ => {}
         }
     }
 }
@@ -197,6 +228,19 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
         "atan" => Some(InstantFunction::Atan),
         "atanh" => Some(InstantFunction::Atanh),
         "ceil" => Some(InstantFunction::Ceil),
+        "clamp" => {
+            let min = extra_args.first().copied()?;
+            let max = extra_args.get(1).copied()?;
+            Some(InstantFunction::Clamp { min, max })
+        }
+        "clamp_max" => {
+            let max = extra_args.first().copied()?;
+            Some(InstantFunction::ClampMax { max })
+        }
+        "clamp_min" => {
+            let min = extra_args.first().copied()?;
+            Some(InstantFunction::ClampMin { min })
+        }
         "cos" => Some(InstantFunction::Cos),
         "cosh" => Some(InstantFunction::Cosh),
         "deg" => Some(InstantFunction::Deg),
@@ -649,5 +693,136 @@ mod tests {
             lookup_instant_function("sqrt", &[]),
             Some(InstantFunction::Sqrt)
         ));
+    }
+
+    // --- clamp tests ---
+
+    #[test]
+    fn test_clamp_within_range() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_below_min() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(-5.0), 1.0);
+    }
+
+    #[test]
+    fn test_clamp_above_max() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(15.0), 10.0);
+    }
+
+    #[test]
+    fn test_clamp_min_greater_than_max_returns_nan() {
+        let f = InstantFunction::Clamp {
+            min: 10.0,
+            max: 1.0,
+        };
+        assert!(f.evaluate(5.0).is_nan());
+    }
+
+    #[test]
+    fn test_clamp_at_boundaries() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(1.0), 1.0);
+        assert_eq!(f.evaluate(10.0), 10.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp() {
+        assert_eq!(
+            lookup_instant_function("clamp", &[1.0, 10.0]),
+            Some(InstantFunction::Clamp {
+                min: 1.0,
+                max: 10.0
+            })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_missing_args() {
+        assert!(lookup_instant_function("clamp", &[]).is_none());
+        assert!(lookup_instant_function("clamp", &[1.0]).is_none());
+    }
+
+    // --- clamp_min tests ---
+
+    #[test]
+    fn test_clamp_min_below() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(1.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_min_above() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(10.0), 10.0);
+    }
+
+    #[test]
+    fn test_clamp_min_equal() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp_min() {
+        assert_eq!(
+            lookup_instant_function("clamp_min", &[3.0]),
+            Some(InstantFunction::ClampMin { min: 3.0 })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_min_missing_args() {
+        assert!(lookup_instant_function("clamp_min", &[]).is_none());
+    }
+
+    // --- clamp_max tests ---
+
+    #[test]
+    fn test_clamp_max_above() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(10.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_max_below() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_clamp_max_equal() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp_max() {
+        assert_eq!(
+            lookup_instant_function("clamp_max", &[7.0]),
+            Some(InstantFunction::ClampMax { max: 7.0 })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_max_missing_args() {
+        assert!(lookup_instant_function("clamp_max", &[]).is_none());
     }
 }

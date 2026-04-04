@@ -6,6 +6,9 @@ mod asinh;
 mod atan;
 mod atanh;
 mod ceil;
+mod clamp;
+mod clamp_max;
+mod clamp_min;
 mod cos;
 mod cosh;
 mod deg;
@@ -39,6 +42,9 @@ pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr 
         InstantFunction::Atan => atan::expr(input),
         InstantFunction::Atanh => atanh::expr(input),
         InstantFunction::Ceil => ceil::expr(input),
+        InstantFunction::Clamp { min, max } => clamp::expr(input, *min, *max),
+        InstantFunction::ClampMax { max } => clamp_max::expr(input, *max),
+        InstantFunction::ClampMin { min } => clamp_min::expr(input, *min),
         InstantFunction::Cos => cos::expr(input),
         InstantFunction::Cosh => cosh::expr(input),
         InstantFunction::Deg => deg::expr(input),
@@ -69,4 +75,14 @@ pub(super) fn promql_round(value: f64, to_nearest: f64) -> f64 {
         return value;
     }
     (value / to_nearest + 0.5).floor() * to_nearest
+}
+
+/// PromQL `clamp(v, min, max)` semantics.
+///
+/// Returns NaN if min > max, matching Prometheus behavior.
+pub(super) fn promql_clamp(value: f64, min: f64, max: f64) -> f64 {
+    if min > max {
+        return f64::NAN;
+    }
+    value.clamp(min, max)
 }

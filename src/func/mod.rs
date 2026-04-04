@@ -4,6 +4,7 @@ pub(crate) mod instant;
 pub(crate) mod label;
 pub(crate) mod range;
 pub(crate) mod range_udaf;
+pub(crate) mod sort;
 pub(crate) mod udf;
 
 pub(crate) use aggregate::{AggregateFunction, lookup_aggregate_function};
@@ -13,4 +14,5 @@ pub(crate) use datetime::{
 pub(crate) use instant::{InstantFunction, lookup_instant_function};
 pub(crate) use label::{make_label_join_udf, make_label_replace_udf};
 pub(crate) use range::{RangeFunction, lookup_range_function};
+pub(crate) use sort::lookup_sort_function;
 pub(crate) use udf::instant_func_to_expr;
