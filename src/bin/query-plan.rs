@@ -19,9 +19,21 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Evaluation timestamp in nanoseconds (omit for whole-range query)
-    #[arg(short, long)]
+    /// Evaluation timestamp as unix seconds (for instant queries)
+    #[arg(short, long, conflicts_with_all = ["start", "end", "step"])]
     timestamp: Option<i64>,
+
+    /// Start timestamp as unix seconds (for range queries)
+    #[arg(long, conflicts_with = "timestamp")]
+    start: Option<i64>,
+
+    /// End timestamp as unix seconds (for range queries)
+    #[arg(long, conflicts_with = "timestamp")]
+    end: Option<i64>,
+
+    /// Step duration in seconds (for range queries, default: 1)
+    #[arg(long, conflicts_with = "timestamp")]
+    step: Option<u64>,
 
     /// Show the logical plan (before optimization)
     #[arg(long)]
@@ -51,20 +63,35 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
 
-    let logical_plan = if let Some(ts_ns) = cli.timestamp {
+    const NS_PER_SEC: i64 = 1_000_000_000;
+
+    let logical_plan = if let Some(ts) = cli.timestamp {
+        let ts_ns = ts * NS_PER_SEC;
         let timestamp = DateTime::from_timestamp_nanos(ts_ns);
         planner.instant_logical_plan(&cli.query, timestamp).await?
     } else {
-        // Whole-range query: no timestamp, use plan_expr directly.
         let expr =
             promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
-        // No timestamp constraints for whole-range queries.
-        let time_range = TimeRange::unbounded();
+
+        let start_ns = cli
+            .start
+            .ok_or("--start is required for range queries (or use --timestamp for instant)")?
+            * NS_PER_SEC;
+        let end_ns = cli
+            .end
+            .ok_or("--end is required for range queries (or use --timestamp for instant)")?
+            * NS_PER_SEC;
+        let step_ns = cli.step.unwrap_or(1) as i64 * NS_PER_SEC;
+
+        let time_range = TimeRange {
+            start_ns: Some(start_ns),
+            end_ns: Some(end_ns),
+        };
         let params = datafusion_promql::plan::EvalParams {
             eval_ts_ns: None,
-            start_ns: 0,
-            end_ns: i64::MAX,
-            step_ns: 1,
+            start_ns,
+            end_ns,
+            step_ns,
         };
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
     };
