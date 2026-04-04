@@ -25,8 +25,8 @@ use crate::func::{
     lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
 use crate::node::{
-    BinaryEval, InstantFunction, InstantVectorEval, MatchCardinality, RangeFunctionEval,
-    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
+    BinaryEval, DateTimeFunctionNode, InstantFunction, InstantVectorEval, MatchCardinality,
+    RangeFunctionEval, RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
@@ -1151,49 +1151,16 @@ async fn plan_datetime_function(
         return plan_synthetic_datetime(dt_func, params);
     }
 
-    // Has a vector argument: plan the child, then project timestamp → value.
+    // Has a vector argument: plan the child, then wrap in a DateTimeFunctionNode.
+    // The optimizer will lower this to a projection that replaces `value` with
+    // dt_func(timestamp) and drops `__name__`.
     let vector_arg = &call.args.args[0];
     let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
-
-    // Build a projection that replaces `value` with dt_func(timestamp)
-    // and drops __name__ (since datetime functions change the meaning of the value).
-    let child_schema = child_plan.schema();
-    let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
-
-    for field in child_schema.fields() {
-        let name = field.name();
-        if name == "__name__" {
-            continue;
-        }
-        let (qualifier, child_field) = child_schema
-            .qualified_field_with_name(None, name.as_str())
-            .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
-        let col_expr = datafusion::logical_expr::Expr::Column(datafusion::common::Column::from((
-            qualifier,
-            child_field,
-        )));
-
-        if name == "value" {
-            // Replace value with the datetime function applied to the timestamp column.
-            let (ts_qualifier, ts_field) = child_schema
-                .qualified_field_with_name(None, "timestamp")
-                .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
-            let ts_expr = datafusion::logical_expr::Expr::Column(datafusion::common::Column::from(
-                (ts_qualifier, ts_field),
-            ));
-            exprs.push(datetime_func_to_expr(dt_func, ts_expr));
-        } else {
-            exprs.push(col_expr.alias(name.as_str()));
-        }
-    }
-
-    let plan = LogicalPlanBuilder::from(child_plan)
-        .project(exprs)
-        .map_err(|e| PromqlError::Plan(format!("datetime projection error: {e}")))?
-        .build()
-        .map_err(|e| PromqlError::Plan(format!("datetime build error: {e}")))?;
-
-    Ok(plan)
+    let func_expr = datetime_func_to_expr(dt_func, col("timestamp"));
+    let node = DateTimeFunctionNode::new(child_plan, func_expr, dt_func.to_string())?;
+    Ok(LogicalPlan::Extension(Extension {
+        node: Arc::new(node),
+    }))
 }
 
 /// Generate a synthetic series for no-argument datetime functions (and `time()`).

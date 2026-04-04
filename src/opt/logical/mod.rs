@@ -1,7 +1,9 @@
+mod datetime_func_to_projection;
 mod instant_func_to_projection;
 mod lift_constant_projections;
 mod range_vector_to_aggregation;
 
+pub use datetime_func_to_projection::DateTimeFuncToProjection;
 pub use instant_func_to_projection::InstantFuncToProjection;
 pub use lift_constant_projections::LiftConstantProjections;
 pub use range_vector_to_aggregation::RangeVectorToAggregation;
