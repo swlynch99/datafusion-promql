@@ -9,6 +9,7 @@ mod label_functions;
 mod optimizations;
 mod range_query;
 mod round_function;
+mod sort_function;
 mod trig_functions;
 
 mod inspect_offset;
