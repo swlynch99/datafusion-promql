@@ -220,8 +220,8 @@ impl OptimizerRule for LiftConstantProjections {
         let mut outer_exprs: Vec<Expr> = Vec::with_capacity(ncols);
         let mut inner_col_idx = 0;
 
-        for col_idx in 0..ncols {
-            if let Some((ref value, ref name)) = constant_cols[col_idx] {
+        for constant_col in &constant_cols {
+            if let Some((value, name)) = constant_col {
                 outer_exprs.push(lit(value.clone()).alias(name.as_str()));
             } else {
                 let (qualifier, field) = inner_schema.qualified_field(inner_col_idx);
@@ -318,11 +318,9 @@ fn expr_references_columns(expr: &Expr, column_names: &[&str]) -> bool {
         _ => {
             let mut references = false;
             expr.apply(|e| {
-                if let Expr::Column(col) = e {
-                    if column_names.contains(&col.name.as_str()) {
-                        references = true;
-                        return Ok(datafusion::common::tree_node::TreeNodeRecursion::Stop);
-                    }
+                if let Expr::Column(col) = e && column_names.contains(&col.name.as_str()) {
+                    references = true;
+                    return Ok(datafusion::common::tree_node::TreeNodeRecursion::Stop);
                 }
                 Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
             })

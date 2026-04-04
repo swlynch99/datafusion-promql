@@ -87,11 +87,6 @@ impl DateTimeFunction {
         }
     }
 
-    /// Whether this function drops the `__name__` label from its output.
-    #[cfg(test)]
-    pub fn drops_metric_name(&self) -> bool {
-        true
-    }
 }
 
 /// Returns the number of days in the given month (1-indexed) of the given year.

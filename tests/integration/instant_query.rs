@@ -361,7 +361,7 @@ async fn test_floor_instant_query() {
                 samples[2].value
             );
 
-            assert!(samples[0].labels.get("__name__").is_none());
+            assert!(!samples[0].labels.contains_key("__name__"));
         }
         other => panic!("expected Vector result, got {other:?}"),
     }

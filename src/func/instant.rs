@@ -402,7 +402,7 @@ mod tests {
         // e^-100 should be very close to 0
         let result = InstantFunction::Exp.evaluate(-100.0);
         assert!(
-            result >= 0.0 && result < 1e-40,
+            (0.0..1e-40).contains(&result),
             "expected near 0, got {result}"
         );
     }
