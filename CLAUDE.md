@@ -42,6 +42,12 @@ cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 0 
 cargo run --bin query-plot --features plot -- -f data/metrics.parquet --timestamp 60000 'metric'
 # Custom output file and dimensions:
 cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 0 --end 60000 -o chart.png --width 1280 --height 960 'rate(metric[30s])'
+
+# Execute a query and plot results in the terminal (requires terminal-plot feature)
+# Range query:
+cargo run --bin query-tplot --features terminal-plot -- -f data/metrics.parquet --start 1750106216002000000 --end 1750106506001000000 --step 60 'rate(cpu_usage[60s])'
+# Instant query:
+cargo run --bin query-tplot --features terminal-plot -- -f data/metrics.parquet --timestamp 1750106360000000000 'cpu_cores'
 ```
 
 ## Architecture

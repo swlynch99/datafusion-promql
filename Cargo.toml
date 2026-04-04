@@ -17,6 +17,11 @@ name = "query-plot"
 path = "src/bin/query-plot.rs"
 required-features = ["plot"]
 
+[[bin]]
+name = "query-tplot"
+path = "src/bin/query-tplot.rs"
+required-features = ["terminal-plot"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 promql-parser = "0.8"
@@ -28,10 +33,13 @@ chrono = "0.4"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
 plotters = { version = "0.3", optional = true }
+textplots = { version = "0.8", optional = true }
+rgb = { version = "0.8", optional = true }
 
 [features]
 parquet = ["datafusion/parquet"]
 plot = ["parquet", "plotters"]
+terminal-plot = ["parquet", "textplots", "rgb"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
