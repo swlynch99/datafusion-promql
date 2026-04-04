@@ -9,7 +9,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Union};
 use datafusion::optimizer::OptimizerRule;
 use datafusion::prelude::*;
 
-use datafusion_promql::plan::lift_constant_projections::LiftConstantProjections;
+use datafusion_promql::opt::logical::LiftConstantProjections;
 
 /// Build a trivial single-row MemTable scan to use as the base of test projections.
 fn make_scan(alias: &str) -> LogicalPlan {
