@@ -252,12 +252,10 @@ fn build_metric_metadata(
 /// Returns `(min_ns, max_ns)` as nanosecond timestamps. This reads only the
 /// file footer metadata — no row data is decoded.
 pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
-    let file = File::open(path.as_ref()).map_err(|e| {
-        PromqlError::DataSource(format!("failed to open parquet file: {e}"))
-    })?;
-    let reader = SerializedFileReader::new(file).map_err(|e| {
-        PromqlError::DataSource(format!("failed to read parquet metadata: {e}"))
-    })?;
+    let file = File::open(path.as_ref())
+        .map_err(|e| PromqlError::DataSource(format!("failed to open parquet file: {e}")))?;
+    let reader = SerializedFileReader::new(file)
+        .map_err(|e| PromqlError::DataSource(format!("failed to read parquet metadata: {e}")))?;
     let metadata = reader.metadata();
     let file_meta = metadata.file_metadata();
     let schema = file_meta.schema_descr();
@@ -276,8 +274,7 @@ pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
         let rg = metadata.row_group(rg_idx);
         let col = rg.column(ts_idx);
         if let Some(stats) = col.statistics() {
-            let (Some(min_bytes), Some(max_bytes)) =
-                (stats.min_bytes_opt(), stats.max_bytes_opt())
+            let (Some(min_bytes), Some(max_bytes)) = (stats.min_bytes_opt(), stats.max_bytes_opt())
             else {
                 continue;
             };

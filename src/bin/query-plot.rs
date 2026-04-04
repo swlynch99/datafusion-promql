@@ -258,9 +258,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let start = DateTime::from_timestamp_nanos(auto_min_ns);
         let end = DateTime::from_timestamp_nanos(auto_max_ns);
         let step = std::time::Duration::from_secs(cli.step);
-        eprintln!(
-            "No timestamps specified; using range from parquet metadata: [{start} .. {end}]"
-        );
+        eprintln!("No timestamps specified; using range from parquet metadata: [{start} .. {end}]");
         let result = engine.range_query(&cli.query, start, end, step).await?;
         plot_matrix(&result, &cli.query, width, height)?;
     };
