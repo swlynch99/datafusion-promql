@@ -104,7 +104,10 @@ impl ScalarUDFImpl for LabelReplaceUdf {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish()) as ArrayRef))
             }
-            (ColumnarValue::Scalar(ScalarValue::Utf8(src)), ColumnarValue::Scalar(ScalarValue::Utf8(dst))) => {
+            (
+                ColumnarValue::Scalar(ScalarValue::Utf8(src)),
+                ColumnarValue::Scalar(ScalarValue::Utf8(dst)),
+            ) => {
                 let src = src.as_deref().unwrap_or("");
                 let dst = dst.as_deref().unwrap_or("");
                 let result = self.apply_replace(src, dst);
@@ -204,10 +207,7 @@ impl LabelJoinUdf {
         Self {
             separator,
             num_src_labels,
-            signature: Signature::new(
-                TypeSignature::Exact(arg_types),
-                Volatility::Immutable,
-            ),
+            signature: Signature::new(TypeSignature::Exact(arg_types), Volatility::Immutable),
         }
     }
 }

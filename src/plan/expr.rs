@@ -21,8 +21,8 @@ use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
     AggregateFunction, datetime_func_to_expr, is_time_function, lookup_aggregate_function,
-    lookup_datetime_function, lookup_instant_function, lookup_range_function,
-    make_label_join_udf, make_label_replace_udf,
+    lookup_datetime_function, lookup_instant_function, lookup_range_function, make_label_join_udf,
+    make_label_replace_udf,
 };
 use crate::node::{
     BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
@@ -280,8 +280,7 @@ async fn plan_label_function(
             let src_label = extract_string_literal(&call.args.args[3])?;
             let regex_pattern = extract_string_literal(&call.args.args[4])?;
 
-            let child_plan =
-                Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
 
             build_label_replace_projection(
                 child_plan,
@@ -308,8 +307,7 @@ async fn plan_label_function(
                 .map(|a| extract_string_literal(a))
                 .collect::<Result<_>>()?;
 
-            let child_plan =
-                Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
 
             build_label_join_projection(child_plan, &dst_label, &separator, &src_labels)
         }
@@ -332,28 +330,17 @@ fn build_label_replace_projection(
     let udf = make_label_replace_udf(replacement.to_string(), regex_pattern.to_string());
 
     // Determine the src_label expression. If the column doesn't exist, use empty string.
-    let src_expr = if child_schema
-        .fields()
-        .iter()
-        .any(|f| f.name() == src_label)
-    {
+    let src_expr = if child_schema.fields().iter().any(|f| f.name() == src_label) {
         col(src_label)
     } else {
         lit("").alias(src_label)
     };
 
     // Determine if dst_label already exists.
-    let dst_exists = child_schema
-        .fields()
-        .iter()
-        .any(|f| f.name() == dst_label);
+    let dst_exists = child_schema.fields().iter().any(|f| f.name() == dst_label);
 
     // The current dst value: if column exists, use it; otherwise use empty string.
-    let current_dst_expr = if dst_exists {
-        col(dst_label)
-    } else {
-        lit("")
-    };
+    let current_dst_expr = if dst_exists { col(dst_label) } else { lit("") };
 
     // Build projection: pass through all columns, add/replace dst_label.
     let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
@@ -420,10 +407,7 @@ fn build_label_join_projection(
         })
         .collect();
 
-    let dst_exists = child_schema
-        .fields()
-        .iter()
-        .any(|f| f.name() == dst_label);
+    let dst_exists = child_schema.fields().iter().any(|f| f.name() == dst_label);
 
     // Build projection.
     let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();

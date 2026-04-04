@@ -264,10 +264,7 @@ async fn test_label_join_empty_separator() {
 
     // Join with empty separator (concatenation)
     let result = engine
-        .instant_query(
-            r#"label_join(metric, "combined", "", "job", "job")"#,
-            ts,
-        )
+        .instant_query(r#"label_join(metric, "combined", "", "job", "job")"#, ts)
         .await
         .unwrap();
 
@@ -276,10 +273,7 @@ async fn test_label_join_empty_separator() {
             assert_eq!(samples.len(), 2);
             samples.sort_by(|a, b| a.labels.get("job").cmp(&b.labels.get("job")));
 
-            assert_eq!(
-                samples[0].labels.get("combined").unwrap(),
-                "grafanagrafana"
-            );
+            assert_eq!(samples[0].labels.get("combined").unwrap(), "grafanagrafana");
             assert_eq!(
                 samples[1].labels.get("combined").unwrap(),
                 "prometheusprometheus"
@@ -297,10 +291,7 @@ async fn test_label_join_single_label() {
 
     // Joining a single label just copies it.
     let result = engine
-        .instant_query(
-            r#"label_join(metric, "job_copy", "/", "job")"#,
-            ts,
-        )
+        .instant_query(r#"label_join(metric, "job_copy", "/", "job")"#, ts)
         .await
         .unwrap();
 
@@ -324,10 +315,7 @@ async fn test_label_join_overwrite_existing() {
 
     // Overwrite existing "job" label with joined value.
     let result = engine
-        .instant_query(
-            r#"label_join(metric, "job", "-", "job", "instance")"#,
-            ts,
-        )
+        .instant_query(r#"label_join(metric, "job", "-", "job", "instance")"#, ts)
         .await
         .unwrap();
 
