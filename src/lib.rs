@@ -51,6 +51,9 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(
                 crate::plan::instant_func_to_projection::InstantFuncToProjection,
             ))
+            .with_optimizer_rule(Arc::new(
+                crate::plan::range_vector_to_aggregation::RangeVectorToAggregation,
+            ))
             .build();
         let ctx = SessionContext::new_with_state(state);
         Self { ctx, source }
