@@ -12,6 +12,11 @@ name = "query-plan"
 path = "src/bin/query-plan.rs"
 required-features = ["parquet"]
 
+[[bin]]
+name = "query-plot"
+path = "src/bin/query-plot.rs"
+required-features = ["plot"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 promql-parser = "0.8"
@@ -22,9 +27,11 @@ thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
+plotters = { version = "0.3", optional = true }
 
 [features]
 parquet = ["datafusion/parquet"]
+plot = ["parquet", "plotters"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
