@@ -154,6 +154,12 @@ pub(crate) fn normalize_wide_to_long(
         .map_err(|e| PromqlError::Plan(format!("failed to build scan: {e}")))?
         .project(exprs)
         .map_err(|e| PromqlError::Plan(format!("failed to build projection: {e}")))?
+        // Sort each branch by timestamp independently. Since label columns
+        // are constant literals within each branch, this is equivalent to
+        // sorting by labels + timestamp but avoids a full sort over the
+        // combined UNION ALL output.
+        .sort(vec![col("timestamp").sort(true, false)])
+        .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
         .build()
         .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
 
