@@ -11,6 +11,8 @@ pub(crate) enum RangeFunction {
     Increase,
     /// Difference between last and first sample (gauge metric).
     Delta,
+    /// Difference between the last two samples (gauge equivalent of irate).
+    Idelta,
 }
 
 impl fmt::Display for RangeFunction {
@@ -20,6 +22,7 @@ impl fmt::Display for RangeFunction {
             Self::Irate => write!(f, "irate"),
             Self::Increase => write!(f, "increase"),
             Self::Delta => write!(f, "delta"),
+            Self::Idelta => write!(f, "idelta"),
         }
     }
 }
@@ -31,6 +34,7 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
         "irate" => Some(RangeFunction::Irate),
         "increase" => Some(RangeFunction::Increase),
         "delta" => Some(RangeFunction::Delta),
+        "idelta" => Some(RangeFunction::Idelta),
         _ => None,
     }
 }
@@ -78,6 +82,12 @@ impl RangeFunction {
                 let (_, first_val) = samples[0];
                 let (_, last_val) = samples[samples.len() - 1];
                 Some(last_val - first_val)
+            }
+            Self::Idelta => {
+                let n = samples.len();
+                let (_, prev_val) = samples[n - 2];
+                let (_, last_val) = samples[n - 1];
+                Some(last_val - prev_val)
             }
         }
     }
@@ -248,5 +258,38 @@ mod tests {
     fn test_delta_insufficient_samples() {
         let samples = vec![(1_000_000_000, 10.0)];
         assert!(RangeFunction::Delta.evaluate(&samples).is_none());
+    }
+
+    #[test]
+    fn test_idelta_basic() {
+        // idelta uses only the last two samples: (3s, 18) - (2s, 12) = 6.0
+        let samples = vec![
+            (0, 10.0),
+            (1_000_000_000, 15.0),
+            (2_000_000_000, 12.0),
+            (3_000_000_000, 18.0),
+        ];
+        let result = RangeFunction::Idelta.evaluate(&samples).unwrap();
+        assert!(
+            (result - 6.0).abs() < f64::EPSILON,
+            "expected 6.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_idelta_negative() {
+        // Last two: (2s, 10) - (1s, 15) = -5.0
+        let samples = vec![(0, 20.0), (1_000_000_000, 15.0), (2_000_000_000, 10.0)];
+        let result = RangeFunction::Idelta.evaluate(&samples).unwrap();
+        assert!(
+            (result - (-5.0)).abs() < f64::EPSILON,
+            "expected -5.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_idelta_insufficient_samples() {
+        let samples = vec![(1_000_000_000, 10.0)];
+        assert!(RangeFunction::Idelta.evaluate(&samples).is_none());
     }
 }

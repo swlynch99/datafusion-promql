@@ -383,6 +383,75 @@ async fn test_range_query_delta_over_range() {
     }
 }
 
+// ---- Instant query with idelta() ----
+
+#[tokio::test]
+async fn test_instant_query_idelta() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // idelta(temperature[3s]) at t=5s
+    // Window [2s, 5s]: samples at 2s,3s,4s,5s -> values 25,23,21,24
+    // idelta uses last two: 24 - 21 = 3.0
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("idelta(temperature[3s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1, "expected 1 series");
+            assert!(
+                (samples[0].value - 3.0).abs() < f64::EPSILON,
+                "expected idelta 3.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_idelta_over_range() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // idelta(temperature[3s]) over [3s, 6s] step 3s
+    // gauge_values: 20, 22, 25, 23, 21, 24, 26
+    // At t=3s: window [0s,3s] -> 20,22,25,23 -> last two: 25,23 -> idelta = -2.0
+    // At t=6s: window [3s,6s] -> 23,21,24,26 -> last two: 24,26 -> idelta = 2.0
+    let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
+    let step = Duration::from_secs(3);
+
+    let result = engine
+        .range_query("idelta(temperature[3s])", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1, "expected 1 series");
+            assert_eq!(series[0].samples.len(), 2, "expected 2 steps");
+
+            // t=3s: idelta(25, 23) = -2.0
+            assert!(
+                (series[0].samples[0].1 - (-2.0)).abs() < f64::EPSILON,
+                "expected idelta -2.0 at t=3s, got {}",
+                series[0].samples[0].1
+            );
+            // t=6s: idelta(24, 26) = 2.0
+            assert!(
+                (series[0].samples[1].1 - 2.0).abs() < f64::EPSILON,
+                "expected idelta 2.0 at t=6s, got {}",
+                series[0].samples[1].1
+            );
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
 // ---- Range query returning matrix (plain selector) ----
 
 #[tokio::test]
