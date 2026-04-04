@@ -18,8 +18,26 @@ use datafusion::logical_expr::{
 pub(crate) enum InstantFunction {
     /// Absolute value of each sample value.
     Abs,
+    /// Arccosine of each sample value (radians).
+    Acos,
+    /// Inverse hyperbolic cosine of each sample value.
+    Acosh,
+    /// Arcsine of each sample value (radians).
+    Asin,
+    /// Inverse hyperbolic sine of each sample value.
+    Asinh,
+    /// Arctangent of each sample value (radians).
+    Atan,
+    /// Inverse hyperbolic tangent of each sample value.
+    Atanh,
     /// Round each sample value up to the nearest integer.
     Ceil,
+    /// Cosine of each sample value (radians).
+    Cos,
+    /// Hyperbolic cosine of each sample value.
+    Cosh,
+    /// Convert each sample value from radians to degrees.
+    Deg,
     /// Exponential function: e raised to the power of the sample value.
     Exp,
     /// Round each sample value down to the nearest integer.
@@ -29,29 +47,53 @@ pub(crate) enum InstantFunction {
     Log2,
     /// Base-10 logarithm of each sample value.
     Log10,
+    /// Convert each sample value from degrees to radians.
+    Rad,
     /// Round each value to the nearest multiple of `to_nearest`.
     Round {
         to_nearest: f64,
     },
     /// Returns the sign of each sample: -1 if negative, 0 if zero, 1 if positive.
     Sgn,
+    /// Sine of each sample value (radians).
+    Sin,
+    /// Hyperbolic sine of each sample value.
+    Sinh,
     /// Square root of each sample value. Returns NaN for negative inputs.
     Sqrt,
+    /// Tangent of each sample value (radians).
+    Tan,
+    /// Hyperbolic tangent of each sample value.
+    Tanh,
 }
 
 impl fmt::Display for InstantFunction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Abs => write!(f, "abs"),
+            Self::Acos => write!(f, "acos"),
+            Self::Acosh => write!(f, "acosh"),
+            Self::Asin => write!(f, "asin"),
+            Self::Asinh => write!(f, "asinh"),
+            Self::Atan => write!(f, "atan"),
+            Self::Atanh => write!(f, "atanh"),
             Self::Ceil => write!(f, "ceil"),
+            Self::Cos => write!(f, "cos"),
+            Self::Cosh => write!(f, "cosh"),
+            Self::Deg => write!(f, "deg"),
             Self::Exp => write!(f, "exp"),
             Self::Floor => write!(f, "floor"),
             Self::Ln => write!(f, "ln"),
             Self::Log2 => write!(f, "log2"),
             Self::Log10 => write!(f, "log10"),
+            Self::Rad => write!(f, "rad"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
             Self::Sgn => write!(f, "sgn"),
+            Self::Sin => write!(f, "sin"),
+            Self::Sinh => write!(f, "sinh"),
             Self::Sqrt => write!(f, "sqrt"),
+            Self::Tan => write!(f, "tan"),
+            Self::Tanh => write!(f, "tanh"),
         }
     }
 }
@@ -62,12 +104,22 @@ impl InstantFunction {
     pub fn evaluate(&self, value: f64) -> f64 {
         match self {
             Self::Abs => value.abs(),
+            Self::Acos => value.acos(),
+            Self::Acosh => value.acosh(),
+            Self::Asin => value.asin(),
+            Self::Asinh => value.asinh(),
+            Self::Atan => value.atan(),
+            Self::Atanh => value.atanh(),
             Self::Ceil => value.ceil(),
+            Self::Cos => value.cos(),
+            Self::Cosh => value.cosh(),
+            Self::Deg => value.to_degrees(),
             Self::Exp => value.exp(),
             Self::Floor => value.floor(),
             Self::Ln => value.ln(),
             Self::Log2 => value.log2(),
             Self::Log10 => value.log10(),
+            Self::Rad => value.to_radians(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
             Self::Sgn => {
                 if value.is_nan() {
@@ -80,7 +132,11 @@ impl InstantFunction {
                     0.0
                 }
             }
+            Self::Sin => value.sin(),
+            Self::Sinh => value.sinh(),
             Self::Sqrt => value.sqrt(),
+            Self::Tan => value.tan(),
+            Self::Tanh => value.tanh(),
         }
     }
 
@@ -98,18 +154,32 @@ impl InstantFunction {
 impl PartialEq for InstantFunction {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Abs, Self::Abs) => true,
-            (Self::Ceil, Self::Ceil) => true,
-            (Self::Exp, Self::Exp) => true,
-            (Self::Floor, Self::Floor) => true,
-            (Self::Ln, Self::Ln) => true,
-            (Self::Log2, Self::Log2) => true,
-            (Self::Log10, Self::Log10) => true,
+            (Self::Abs, Self::Abs)
+            | (Self::Acos, Self::Acos)
+            | (Self::Acosh, Self::Acosh)
+            | (Self::Asin, Self::Asin)
+            | (Self::Asinh, Self::Asinh)
+            | (Self::Atan, Self::Atan)
+            | (Self::Atanh, Self::Atanh)
+            | (Self::Ceil, Self::Ceil)
+            | (Self::Cos, Self::Cos)
+            | (Self::Cosh, Self::Cosh)
+            | (Self::Deg, Self::Deg)
+            | (Self::Exp, Self::Exp)
+            | (Self::Floor, Self::Floor)
+            | (Self::Ln, Self::Ln)
+            | (Self::Log2, Self::Log2)
+            | (Self::Log10, Self::Log10)
+            | (Self::Rad, Self::Rad)
+            | (Self::Sgn, Self::Sgn)
+            | (Self::Sin, Self::Sin)
+            | (Self::Sinh, Self::Sinh)
+            | (Self::Sqrt, Self::Sqrt)
+            | (Self::Tan, Self::Tan)
+            | (Self::Tanh, Self::Tanh) => true,
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
-            (Self::Sgn, Self::Sgn) => true,
-            (Self::Sqrt, Self::Sqrt) => true,
             _ => false,
         }
     }
@@ -119,17 +189,8 @@ impl Eq for InstantFunction {}
 impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        match self {
-            Self::Abs
-            | Self::Ceil
-            | Self::Exp
-            | Self::Floor
-            | Self::Ln
-            | Self::Log2
-            | Self::Log10
-            | Self::Sgn
-            | Self::Sqrt => {}
-            Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
+        if let Self::Round { to_nearest } = self {
+            to_nearest.to_bits().hash(state);
         }
     }
 }
@@ -141,18 +202,32 @@ impl Hash for InstantFunction {
 pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<InstantFunction> {
     match name {
         "abs" => Some(InstantFunction::Abs),
+        "acos" => Some(InstantFunction::Acos),
+        "acosh" => Some(InstantFunction::Acosh),
+        "asin" => Some(InstantFunction::Asin),
+        "asinh" => Some(InstantFunction::Asinh),
+        "atan" => Some(InstantFunction::Atan),
+        "atanh" => Some(InstantFunction::Atanh),
         "ceil" => Some(InstantFunction::Ceil),
+        "cos" => Some(InstantFunction::Cos),
+        "cosh" => Some(InstantFunction::Cosh),
+        "deg" => Some(InstantFunction::Deg),
         "exp" => Some(InstantFunction::Exp),
         "floor" => Some(InstantFunction::Floor),
         "ln" => Some(InstantFunction::Ln),
         "log2" => Some(InstantFunction::Log2),
         "log10" => Some(InstantFunction::Log10),
+        "rad" => Some(InstantFunction::Rad),
         "round" => {
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
         }
         "sgn" => Some(InstantFunction::Sgn),
+        "sin" => Some(InstantFunction::Sin),
+        "sinh" => Some(InstantFunction::Sinh),
         "sqrt" => Some(InstantFunction::Sqrt),
+        "tan" => Some(InstantFunction::Tan),
+        "tanh" => Some(InstantFunction::Tanh),
         _ => None,
     }
 }
@@ -174,14 +249,28 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
 pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr {
     let applied = match func {
         InstantFunction::Abs => expr_fn::abs(input),
+        InstantFunction::Acos => expr_fn::acos(input),
+        InstantFunction::Acosh => expr_fn::acosh(input),
+        InstantFunction::Asin => expr_fn::asin(input),
+        InstantFunction::Asinh => expr_fn::asinh(input),
+        InstantFunction::Atan => expr_fn::atan(input),
+        InstantFunction::Atanh => expr_fn::atanh(input),
         InstantFunction::Ceil => expr_fn::ceil(input),
+        InstantFunction::Cos => expr_fn::cos(input),
+        InstantFunction::Cosh => expr_fn::cosh(input),
+        InstantFunction::Deg => expr_fn::degrees(input),
         InstantFunction::Exp => expr_fn::exp(input),
         InstantFunction::Floor => expr_fn::floor(input),
         InstantFunction::Ln => expr_fn::ln(input),
         InstantFunction::Log2 => expr_fn::log2(input),
         InstantFunction::Log10 => expr_fn::log10(input),
+        InstantFunction::Rad => expr_fn::radians(input),
         InstantFunction::Sqrt => expr_fn::sqrt(input),
         InstantFunction::Sgn => expr_fn::signum(input),
+        InstantFunction::Sin => expr_fn::sin(input),
+        InstantFunction::Sinh => expr_fn::sinh(input),
+        InstantFunction::Tan => expr_fn::tan(input),
+        InstantFunction::Tanh => expr_fn::tanh(input),
         InstantFunction::Round { to_nearest } => {
             let udf = make_promql_round_udf(*to_nearest);
             udf.call(vec![input])

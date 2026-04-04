@@ -19,11 +19,11 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Start timestamp in nanoseconds (for range queries)
+    /// Start timestamp in unix seconds (for range queries)
     #[arg(long)]
     start: Option<i64>,
 
-    /// End timestamp in nanoseconds (for range queries)
+    /// End timestamp in unix seconds (for range queries)
     #[arg(long)]
     end: Option<i64>,
 
@@ -31,7 +31,7 @@ struct Cli {
     #[arg(long, default_value = "15")]
     step: u64,
 
-    /// Evaluation timestamp in nanoseconds (for instant queries)
+    /// Evaluation timestamp in unix seconds (for instant queries)
     #[arg(short, long)]
     timestamp: Option<i64>,
 
@@ -232,16 +232,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
-    if let Some(ts_ns) = cli.timestamp {
+    const NS_PER_SEC: i64 = 1_000_000_000;
+
+    if let Some(ts_secs) = cli.timestamp {
         // Instant query.
-        let ts = DateTime::from_timestamp_nanos(ts_ns);
+        let ts = DateTime::from_timestamp_nanos(ts_secs * NS_PER_SEC);
         eprintln!("Executing instant query at {ts}...");
         let result = engine.instant_query(&cli.query, ts).await?;
         plot_vector(&result, &cli.query, width, height)?;
-    } else if let (Some(start_ns), Some(end_ns)) = (cli.start, cli.end) {
+    } else if let (Some(start_secs), Some(end_secs)) = (cli.start, cli.end) {
         // Range query.
-        let start = DateTime::from_timestamp_nanos(start_ns);
-        let end = DateTime::from_timestamp_nanos(end_ns);
+        let start = DateTime::from_timestamp_nanos(start_secs * NS_PER_SEC);
+        let end = DateTime::from_timestamp_nanos(end_secs * NS_PER_SEC);
         let step = std::time::Duration::from_secs(cli.step);
         eprintln!("Executing range query [{start} .. {end}] step {step:?}...");
         let result = engine.range_query(&cli.query, start, end, step).await?;

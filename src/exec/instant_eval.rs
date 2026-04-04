@@ -29,11 +29,13 @@ pub(crate) struct InstantVectorExec {
     #[allow(dead_code)]
     step_ns: i64,
     lookback_ns: i64,
+    offset_ns: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
 }
 
 impl InstantVectorExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
         eval_ts_ns: Option<i64>,
@@ -41,6 +43,7 @@ impl InstantVectorExec {
         end_ns: i64,
         step_ns: i64,
         lookback_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         let schema = child.schema();
@@ -57,6 +60,7 @@ impl InstantVectorExec {
             end_ns,
             step_ns,
             lookback_ns,
+            offset_ns,
             label_columns,
             properties,
         }
@@ -119,6 +123,7 @@ impl ExecutionPlan for InstantVectorExec {
             self.end_ns,
             self.step_ns,
             self.lookback_ns,
+            self.offset_ns,
             self.label_columns.clone(),
         )))
     }
@@ -132,6 +137,7 @@ impl ExecutionPlan for InstantVectorExec {
         let schema = self.schema();
         let eval_timestamps = self.eval_timestamps();
         let lookback_ns = self.lookback_ns;
+        let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
@@ -198,12 +204,16 @@ impl ExecutionPlan for InstantVectorExec {
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                let window_start = eval_ts - lookback_ns;
+                // Apply offset: shift the lookup window into the past by offset_ns.
+                // The effective lookup time is eval_ts - offset_ns, but the
+                // result is reported at eval_ts.
+                let effective_ts = eval_ts - offset_ns;
+                let window_start = effective_ts - lookback_ns;
                 for (key, samples) in &series_map {
-                    // Binary search for the last sample <= eval_ts.
-                    let pos = samples.partition_point(|(ts, _)| *ts <= eval_ts);
+                    // Binary search for the last sample <= effective_ts.
+                    let pos = samples.partition_point(|(ts, _)| *ts <= effective_ts);
                     if pos == 0 {
-                        continue; // No sample at or before eval_ts.
+                        continue; // No sample at or before effective_ts.
                     }
                     let (sample_ts, sample_val) = samples[pos - 1];
                     if sample_ts < window_start {

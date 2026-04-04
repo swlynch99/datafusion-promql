@@ -9,7 +9,8 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 /// Custom logical node that aligns raw samples to evaluation timestamps.
 ///
 /// For each step timestamp `t`, this node picks the most recent sample
-/// within the lookback window `[t - lookback, t]` for each series.
+/// within the lookback window `[t - offset - lookback, t - offset]` for each series.
+/// The result is reported at timestamp `t` (the original eval timestamp).
 #[derive(Debug, Clone)]
 pub(crate) struct InstantVectorEval {
     /// The child plan that produces raw samples in long format.
@@ -23,6 +24,8 @@ pub(crate) struct InstantVectorEval {
     pub step_ns: i64,
     /// Lookback window in nanoseconds.
     pub lookback_ns: i64,
+    /// Offset in nanoseconds. Positive shifts the lookup window into the past.
+    pub offset_ns: i64,
     /// Label column names used for grouping series (excludes timestamp/value).
     pub label_columns: Vec<String>,
 }
@@ -33,6 +36,7 @@ impl InstantVectorEval {
         input: LogicalPlan,
         timestamp_ns: i64,
         lookback_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         Self {
@@ -42,6 +46,7 @@ impl InstantVectorEval {
             end_ns: timestamp_ns,
             step_ns: 1, // single step
             lookback_ns,
+            offset_ns,
             label_columns,
         }
     }
@@ -53,6 +58,7 @@ impl InstantVectorEval {
         end_ns: i64,
         step_ns: i64,
         lookback_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         Self {
@@ -62,6 +68,7 @@ impl InstantVectorEval {
             end_ns,
             step_ns,
             lookback_ns,
+            offset_ns,
             label_columns,
         }
     }
@@ -88,18 +95,20 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "InstantVectorEval: ts={ts}, lookback={}ns, group_by=[{}]",
+                "InstantVectorEval: ts={ts}, lookback={}ns, offset={}ns, group_by=[{}]",
                 self.lookback_ns,
+                self.offset_ns,
                 self.label_columns.join(", ")
             )
         } else {
             write!(
                 f,
-                "InstantVectorEval: range=[{}, {}], step={}ns, lookback={}ns, group_by=[{}]",
+                "InstantVectorEval: range=[{}, {}], step={}ns, lookback={}ns, offset={}ns, group_by=[{}]",
                 self.start_ns,
                 self.end_ns,
                 self.step_ns,
                 self.lookback_ns,
+                self.offset_ns,
                 self.label_columns.join(", ")
             )
         }
@@ -117,6 +126,7 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
             end_ns: self.end_ns,
             step_ns: self.step_ns,
             lookback_ns: self.lookback_ns,
+            offset_ns: self.offset_ns,
             label_columns: self.label_columns.clone(),
         })
     }
@@ -136,6 +146,7 @@ impl PartialEq for InstantVectorEval {
             && self.end_ns == other.end_ns
             && self.step_ns == other.step_ns
             && self.lookback_ns == other.lookback_ns
+            && self.offset_ns == other.offset_ns
             && self.label_columns == other.label_columns
     }
 }
@@ -149,6 +160,7 @@ impl Hash for InstantVectorEval {
         self.end_ns.hash(state);
         self.step_ns.hash(state);
         self.lookback_ns.hash(state);
+        self.offset_ns.hash(state);
         self.label_columns.hash(state);
     }
 }

@@ -30,6 +30,7 @@ pub(crate) struct RangeVectorExec {
     start_ns: i64,
     end_ns: i64,
     step_ns: i64,
+    offset_ns: i64,
     label_columns: Vec<String>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
@@ -65,6 +66,7 @@ impl RangeVectorExec {
         start_ns: i64,
         end_ns: i64,
         step_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         let output_schema = compute_output_schema(&label_columns);
@@ -81,6 +83,7 @@ impl RangeVectorExec {
             start_ns,
             end_ns,
             step_ns,
+            offset_ns,
             label_columns,
             output_schema,
             properties,
@@ -143,6 +146,7 @@ impl ExecutionPlan for RangeVectorExec {
             self.start_ns,
             self.end_ns,
             self.step_ns,
+            self.offset_ns,
             self.label_columns.clone(),
         )))
     }
@@ -156,6 +160,7 @@ impl ExecutionPlan for RangeVectorExec {
         let output_schema = Arc::clone(&self.output_schema);
         let eval_timestamps = self.eval_timestamps();
         let range_ns = self.range_ns;
+        let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
@@ -223,11 +228,14 @@ impl ExecutionPlan for RangeVectorExec {
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                let window_start = eval_ts - range_ns;
+                // Apply offset: shift the lookup window into the past by offset_ns.
+                // The result is reported at eval_ts.
+                let effective_ts = eval_ts - offset_ns;
+                let window_start = effective_ts - range_ns;
                 for (key, samples) in &series_map {
-                    // Find samples within [window_start, eval_ts].
+                    // Find samples within [window_start, effective_ts].
                     let start_idx = samples.partition_point(|(ts, _)| *ts < window_start);
-                    let end_idx = samples.partition_point(|(ts, _)| *ts <= eval_ts);
+                    let end_idx = samples.partition_point(|(ts, _)| *ts <= effective_ts);
 
                     let window = &samples[start_idx..end_idx];
                     if window.is_empty() {
