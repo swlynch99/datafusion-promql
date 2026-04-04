@@ -70,17 +70,18 @@ impl OptimizerRule for InstantFuncToProjection {
 /// func_expr uses an unqualified `col("value")` but the child schema
 /// may require a qualified column reference.
 fn replace_value_col(expr: &Expr, replacement: &Expr) -> Expr {
-    expr.clone().transform(|e| {
-        if let Expr::Column(ref c) = e
-            && c.name == "value"
-            && c.relation.is_none()
-        {
-            return Ok(datafusion::common::tree_node::Transformed::yes(
-                replacement.clone(),
-            ));
-        }
-        Ok(datafusion::common::tree_node::Transformed::no(e))
-    })
-    .expect("transform should not fail")
-    .data
+    expr.clone()
+        .transform(|e| {
+            if let Expr::Column(ref c) = e
+                && c.name == "value"
+                && c.relation.is_none()
+            {
+                return Ok(datafusion::common::tree_node::Transformed::yes(
+                    replacement.clone(),
+                ));
+            }
+            Ok(datafusion::common::tree_node::Transformed::no(e))
+        })
+        .expect("transform should not fail")
+        .data
 }

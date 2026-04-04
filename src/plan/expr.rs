@@ -25,8 +25,8 @@ use crate::func::{
     lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
 use crate::node::{
-    BinaryEval, InstantVectorEval, MatchCardinality, RangeFunctionEval, RangeVectorEval,
-    ScalarBinaryEval, InstantFunction, VectorMatching, convert_binary_op,
+    BinaryEval, InstantFunction, InstantVectorEval, MatchCardinality, RangeFunctionEval,
+    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
