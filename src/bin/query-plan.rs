@@ -58,14 +58,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // Whole-range query: no timestamp, use plan_expr directly.
         let expr =
             promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
+        // Use safe bounds that won't trigger integer overflow in DataFusion's
+        // interval arithmetic (i64::MIN/MAX span causes overflow).
         let time_range = TimeRange {
-            start_ns: i64::MIN,
-            end_ns: i64::MAX,
+            start_ns: 0,
+            end_ns: i64::MAX / 2,
         };
         let params = datafusion_promql::plan::EvalParams {
             eval_ts_ns: None,
-            start_ns: i64::MIN,
-            end_ns: i64::MAX,
+            start_ns: 0,
+            end_ns: i64::MAX / 2,
             step_ns: 1,
         };
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
