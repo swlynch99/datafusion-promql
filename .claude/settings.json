@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && { input=$(cat); echo \"$input\" | jq -r '.tool_input.command // empty' | grep -q 'git commit' && cargo +nightly fmt --all 2>/dev/null; } || true",
+            "command": "[ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && { input=$(cat); printf '%s' \"$input\" | jq -r '.tool_input.command // empty' | grep -q 'git commit' && cargo +nightly fmt --all 2>/dev/null; } || true",
             "timeout": 60,
             "statusMessage": "Running cargo fmt..."
           }
