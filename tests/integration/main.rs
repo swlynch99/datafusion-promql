@@ -1,6 +1,7 @@
 mod abs_function;
 mod aggregate_binary;
 mod aggregate_ops;
+mod clamp_function;
 mod datetime_fn;
 mod instant_fn;
 mod instant_query;
