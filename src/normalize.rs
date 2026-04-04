@@ -154,8 +154,7 @@ pub(crate) fn normalize_wide_to_long(
     let union_plan = if branch_plans.len() == 1 {
         branch_plans.into_iter().next().unwrap()
     } else {
-        let inputs: Vec<Arc<LogicalPlan>> =
-            branch_plans.into_iter().map(Arc::new).collect();
+        let inputs: Vec<Arc<LogicalPlan>> = branch_plans.into_iter().map(Arc::new).collect();
         LogicalPlan::Union(
             Union::try_new_with_loose_types(inputs)
                 .map_err(|e| PromqlError::Plan(format!("failed to build union: {e}")))?,
