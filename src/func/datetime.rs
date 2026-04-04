@@ -86,7 +86,6 @@ impl DateTimeFunction {
             }
         }
     }
-
 }
 
 /// Returns the number of days in the given month (1-indexed) of the given year.
