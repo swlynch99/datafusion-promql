@@ -1,15 +1,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::logical_expr::{Extension, LogicalPlan};
+use arrow::datatypes::DataType;
+use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, cast, col};
 use promql_parser::parser::{self, Expr, LabelModifier};
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
-use crate::func::{lookup_aggregate_function, lookup_instant_function, lookup_range_function};
+use crate::func::{
+    AggregateFunction, lookup_aggregate_function, lookup_instant_function, lookup_range_function,
+};
 use crate::node::{
-    AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality,
-    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
+    BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
+    ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
 
@@ -183,6 +186,9 @@ async fn plan_call(
 }
 
 /// Plan an aggregation expression (sum, avg, count, min, max).
+///
+/// Produces a native DataFusion `Aggregate` logical plan so that the
+/// optimizer can push projections and filters through it.
 async fn plan_aggregate(
     agg: &parser::AggregateExpr,
     source: &dyn MetricSource,
@@ -198,11 +204,46 @@ async fn plan_aggregate(
     let child_label_cols = label_columns_from_schema(child_plan.schema());
     let grouping_labels = compute_grouping_labels(&agg.modifier, &child_label_cols);
 
-    let node = AggregateEval::new(child_plan, func, grouping_labels)?;
+    // Build group-by expressions: always include timestamp, plus grouping labels.
+    let mut group_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in &grouping_labels {
+        group_exprs.push(col(label.as_str()));
+    }
 
-    Ok(LogicalPlan::Extension(Extension {
-        node: Arc::new(node),
-    }))
+    // Map our aggregate function to a DataFusion aggregate expression on the
+    // "value" column.
+    let value_col = col("value");
+    let agg_expr = match func {
+        AggregateFunction::Sum => datafusion::functions_aggregate::sum::sum(value_col),
+        AggregateFunction::Avg => datafusion::functions_aggregate::average::avg(value_col),
+        AggregateFunction::Count => datafusion::functions_aggregate::count::count(value_col),
+        AggregateFunction::Min => datafusion::functions_aggregate::min_max::min(value_col),
+        AggregateFunction::Max => datafusion::functions_aggregate::min_max::max(value_col),
+    }
+    .alias("value");
+
+    let mut builder = LogicalPlanBuilder::from(child_plan)
+        .aggregate(group_exprs, vec![agg_expr])
+        .map_err(|e| PromqlError::Plan(format!("aggregate plan error: {e}")))?;
+
+    // COUNT returns Int64 but downstream expects Float64 for the "value"
+    // column, so add a projection to cast.
+    if func == AggregateFunction::Count {
+        let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+        for label in &grouping_labels {
+            proj_exprs.push(col(label.as_str()));
+        }
+        proj_exprs.push(cast(col("value"), DataType::Float64).alias("value"));
+        builder = builder
+            .project(proj_exprs)
+            .map_err(|e| PromqlError::Plan(format!("count cast projection error: {e}")))?;
+    }
+
+    let plan = builder
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("aggregate build error: {e}")))?;
+
+    Ok(plan)
 }
 
 /// Compute grouping labels from a LabelModifier and the available child label columns.

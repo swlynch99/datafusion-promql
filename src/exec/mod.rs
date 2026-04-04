@@ -1,9 +1,7 @@
-mod aggregate_eval;
 mod binary_eval;
 mod instant_eval;
 mod range_eval;
 
-pub(crate) use aggregate_eval::AggregateExec;
 pub(crate) use binary_eval::{BinaryExec, ScalarBinaryExec};
 pub(crate) use instant_eval::InstantVectorExec;
 pub(crate) use range_eval::RangeVectorExec;
@@ -18,9 +16,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::node::{
-    AggregateEval, BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval,
-};
+use crate::node::{BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval};
 
 /// Extension planner that converts our custom logical nodes into physical plans.
 pub struct PromqlExtensionPlanner;
@@ -61,12 +57,6 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.step_ms,
                 eval.label_columns.clone(),
             );
-            return Ok(Some(Arc::new(exec)));
-        }
-
-        if let Some(eval) = node.as_any().downcast_ref::<AggregateEval>() {
-            let child = Arc::clone(&physical_inputs[0]);
-            let exec = AggregateExec::new(child, eval.func, eval.grouping_labels.clone());
             return Ok(Some(Arc::new(exec)));
         }
 
