@@ -16,7 +16,7 @@ pub type ColumnParser = Arc<dyn Fn(&Field) -> Option<(String, Labels)> + Send + 
 pub enum TableFormat {
     /// Canonical long format: one row per (timestamp, series).
     ///
-    /// Required columns: `__name__` (Utf8), `timestamp` (Int64 millis),
+    /// Required columns: `__name__` (Utf8), `timestamp` (Int64 nanoseconds),
     /// `value` (Float64), plus one Utf8 column per label.
     Long,
 

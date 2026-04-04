@@ -57,7 +57,7 @@ fn make_pow2_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["mem_pages", "mem_pages"])),
-            Arc::new(Int64Array::from(vec![1000_i64, 1000_i64])),
+            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000_i64])),
             Arc::new(Float64Array::from(vec![8.0, 1024.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -117,7 +117,7 @@ async fn test_log2_range_query() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["mem_pages", "mem_pages"])),
-            Arc::new(Int64Array::from(vec![1000_i64, 2000_i64])),
+            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 2_000_000_000_i64])),
             Arc::new(Float64Array::from(vec![4.0, 16.0])),
             Arc::new(StringArray::from(vec!["host1", "host1"])),
         ],

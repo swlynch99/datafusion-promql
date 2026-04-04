@@ -36,7 +36,7 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
 }
 
 impl RangeFunction {
-    /// Evaluate the range function over a window of `(timestamp_ms, value)` samples.
+    /// Evaluate the range function over a window of `(timestamp_ns, value)` samples.
     ///
     /// Samples must be sorted by timestamp. Returns `None` if there are
     /// insufficient samples to compute a result.
@@ -49,7 +49,7 @@ impl RangeFunction {
             Self::Rate => {
                 let (first_ts, _) = samples[0];
                 let (last_ts, _) = samples[samples.len() - 1];
-                let dt_secs = (last_ts - first_ts) as f64 / 1000.0;
+                let dt_secs = (last_ts - first_ts) as f64 / 1_000_000_000.0;
                 if dt_secs == 0.0 {
                     return None;
                 }
@@ -60,7 +60,7 @@ impl RangeFunction {
                 let n = samples.len();
                 let (prev_ts, prev_val) = samples[n - 2];
                 let (last_ts, last_val) = samples[n - 1];
-                let dt_secs = (last_ts - prev_ts) as f64 / 1000.0;
+                let dt_secs = (last_ts - prev_ts) as f64 / 1_000_000_000.0;
                 if dt_secs == 0.0 {
                     return None;
                 }
@@ -110,11 +110,11 @@ mod tests {
         // 10 per second increase over 5 seconds
         let samples = vec![
             (0, 0.0),
-            (1000, 10.0),
-            (2000, 20.0),
-            (3000, 30.0),
-            (4000, 40.0),
-            (5000, 50.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 30.0),
+            (4_000_000_000, 40.0),
+            (5_000_000_000, 50.0),
         ];
         let result = RangeFunction::Rate.evaluate(&samples).unwrap();
         assert!(
@@ -129,10 +129,10 @@ mod tests {
         // Increases: 10, 10, 5(reset), 10 = 35 total over 4 seconds
         let samples = vec![
             (0, 0.0),
-            (1000, 10.0),
-            (2000, 20.0),
-            (3000, 5.0), // reset
-            (4000, 15.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 5.0), // reset
+            (4_000_000_000, 15.0),
         ];
         let result = RangeFunction::Rate.evaluate(&samples).unwrap();
         assert!(
@@ -143,26 +143,26 @@ mod tests {
 
     #[test]
     fn test_rate_insufficient_samples() {
-        let samples = vec![(1000, 10.0)];
+        let samples = vec![(1_000_000_000, 10.0)];
         assert!(RangeFunction::Rate.evaluate(&samples).is_none());
     }
 
     #[test]
     fn test_rate_zero_duration() {
-        let samples = vec![(1000, 10.0), (1000, 20.0)];
+        let samples = vec![(1_000_000_000, 10.0), (1_000_000_000, 20.0)];
         assert!(RangeFunction::Rate.evaluate(&samples).is_none());
     }
 
     #[test]
     fn test_irate_basic() {
-        // Only uses last two samples: (4000, 40) and (5000, 50) -> 10/1 = 10
+        // Only uses last two samples: (4s, 40) and (5s, 50) -> 10/1 = 10
         let samples = vec![
             (0, 0.0),
-            (1000, 10.0),
-            (2000, 20.0),
-            (3000, 30.0),
-            (4000, 40.0),
-            (5000, 50.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 30.0),
+            (4_000_000_000, 40.0),
+            (5_000_000_000, 50.0),
         ];
         let result = RangeFunction::Irate.evaluate(&samples).unwrap();
         assert!(
@@ -173,8 +173,13 @@ mod tests {
 
     #[test]
     fn test_irate_with_counter_reset() {
-        // Last two: (2000, 20) and (3000, 5) -> reset, increase = 5, dt = 1s
-        let samples = vec![(0, 0.0), (1000, 10.0), (2000, 20.0), (3000, 5.0)];
+        // Last two: (2s, 20) and (3s, 5) -> reset, increase = 5, dt = 1s
+        let samples = vec![
+            (0, 0.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 5.0),
+        ];
         let result = RangeFunction::Irate.evaluate(&samples).unwrap();
         assert!(
             (result - 5.0).abs() < f64::EPSILON,
@@ -184,7 +189,12 @@ mod tests {
 
     #[test]
     fn test_increase_basic() {
-        let samples = vec![(0, 100.0), (1000, 110.0), (2000, 120.0), (3000, 130.0)];
+        let samples = vec![
+            (0, 100.0),
+            (1_000_000_000, 110.0),
+            (2_000_000_000, 120.0),
+            (3_000_000_000, 130.0),
+        ];
         let result = RangeFunction::Increase.evaluate(&samples).unwrap();
         assert!(
             (result - 30.0).abs() < f64::EPSILON,
@@ -197,10 +207,10 @@ mod tests {
         // 0 -> 10 -> 20 -> 5(reset) -> 15: increases = 10 + 10 + 5 + 10 = 35
         let samples = vec![
             (0, 0.0),
-            (1000, 10.0),
-            (2000, 20.0),
-            (3000, 5.0),
-            (4000, 15.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 5.0),
+            (4_000_000_000, 15.0),
         ];
         let result = RangeFunction::Increase.evaluate(&samples).unwrap();
         assert!(
@@ -211,7 +221,12 @@ mod tests {
 
     #[test]
     fn test_delta_basic() {
-        let samples = vec![(0, 10.0), (1000, 15.0), (2000, 12.0), (3000, 18.0)];
+        let samples = vec![
+            (0, 10.0),
+            (1_000_000_000, 15.0),
+            (2_000_000_000, 12.0),
+            (3_000_000_000, 18.0),
+        ];
         let result = RangeFunction::Delta.evaluate(&samples).unwrap();
         assert!(
             (result - 8.0).abs() < f64::EPSILON,
@@ -221,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_delta_negative() {
-        let samples = vec![(0, 20.0), (1000, 15.0), (2000, 10.0)];
+        let samples = vec![(0, 20.0), (1_000_000_000, 15.0), (2_000_000_000, 10.0)];
         let result = RangeFunction::Delta.evaluate(&samples).unwrap();
         assert!(
             (result - (-10.0)).abs() < f64::EPSILON,
@@ -231,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_delta_insufficient_samples() {
-        let samples = vec![(1000, 10.0)];
+        let samples = vec![(1_000_000_000, 10.0)];
         assert!(RangeFunction::Delta.evaluate(&samples).is_none());
     }
 }

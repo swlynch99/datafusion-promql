@@ -19,7 +19,7 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Evaluation timestamp in milliseconds (omit for whole-range query)
+    /// Evaluation timestamp in nanoseconds (omit for whole-range query)
     #[arg(short, long)]
     timestamp: Option<i64>,
 
@@ -51,23 +51,22 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
 
-    let logical_plan = if let Some(ts_ms) = cli.timestamp {
-        let timestamp = DateTime::from_timestamp_millis(ts_ms)
-            .ok_or_else(|| format!("invalid timestamp: {ts_ms}"))?;
+    let logical_plan = if let Some(ts_ns) = cli.timestamp {
+        let timestamp = DateTime::from_timestamp_nanos(ts_ns);
         planner.instant_logical_plan(&cli.query, timestamp).await?
     } else {
         // Whole-range query: no timestamp, use plan_expr directly.
         let expr =
             promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
         let time_range = TimeRange {
-            start_ms: i64::MIN,
-            end_ms: i64::MAX,
+            start_ns: i64::MIN,
+            end_ns: i64::MAX,
         };
         let params = datafusion_promql::plan::EvalParams {
-            eval_ts_ms: None,
-            start_ms: i64::MIN,
-            end_ms: i64::MAX,
-            step_ms: 1,
+            eval_ts_ns: None,
+            start_ns: i64::MIN,
+            end_ns: i64::MAX,
+            step_ns: 1,
         };
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
     };

@@ -60,7 +60,11 @@ fn make_sgn_test_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["metric", "metric", "metric"])),
-            Arc::new(Int64Array::from(vec![1000_i64, 1000, 1000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000_i64,
+                1_000_000_000,
+                1_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![42.0, -7.5, 0.0])),
             Arc::new(StringArray::from(vec!["positive", "negative", "zero"])),
         ],
@@ -80,7 +84,7 @@ fn make_test_source() -> InMemoryMetricSource {
     ]));
 
     // Create sample data: cpu_usage metric with two series over several timestamps.
-    // Timestamps in milliseconds.
+    // Timestamps in nanoseconds.
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
@@ -96,9 +100,15 @@ fn make_test_source() -> InMemoryMetricSource {
             ])),
             Arc::new(Int64Array::from(vec![
                 // Series 1: instance=host1 at t=1000, 2000, 3000, 4000
-                1000, 2000, 3000, 4000,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
                 // Series 2: instance=host2 at t=1000, 2000, 3000, 4000
-                1000, 2000, 3000, 4000,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
             ])),
             Arc::new(Float64Array::from(vec![
                 // Series 1 values
@@ -174,12 +184,12 @@ async fn test_instant_query_basic() {
 
             // host1 at eval_ts=3000 should have value 30.0 (exact match at t=3000).
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
-            assert_eq!(samples[0].timestamp_ms, 3000);
+            assert_eq!(samples[0].timestamp_ns, 3_000_000_000);
             assert!((samples[0].value - 30.0).abs() < f64::EPSILON);
 
             // host2 at eval_ts=3000 should have value 70.0.
             assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
-            assert_eq!(samples[1].timestamp_ms, 3000);
+            assert_eq!(samples[1].timestamp_ns, 3_000_000_000);
             assert!((samples[1].value - 70.0).abs() < f64::EPSILON);
         }
         other => panic!("expected Vector result, got {other:?}"),
@@ -205,12 +215,12 @@ async fn test_instant_query_lookback_window() {
 
             // host1: most recent sample before 3500 is at t=3000, value 30.0.
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
-            assert_eq!(samples[0].timestamp_ms, 3500); // eval timestamp
+            assert_eq!(samples[0].timestamp_ns, 3_500_000_000); // eval timestamp
             assert!((samples[0].value - 30.0).abs() < f64::EPSILON);
 
             // host2: most recent sample before 3500 is at t=3000, value 70.0.
             assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
-            assert_eq!(samples[1].timestamp_ms, 3500);
+            assert_eq!(samples[1].timestamp_ns, 3_500_000_000);
             assert!((samples[1].value - 70.0).abs() < f64::EPSILON);
         }
         other => panic!("expected Vector result, got {other:?}"),
@@ -269,7 +279,7 @@ async fn test_instant_query_exp() {
             samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
             assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
-            assert_eq!(samples[0].timestamp_ms, 3000);
+            assert_eq!(samples[0].timestamp_ns, 3_000_000_000);
             let expected_host1 = 30.0_f64.exp();
             assert!(
                 (samples[0].value - expected_host1).abs() < 1e-6,
@@ -278,7 +288,7 @@ async fn test_instant_query_exp() {
             );
 
             assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
-            assert_eq!(samples[1].timestamp_ms, 3000);
+            assert_eq!(samples[1].timestamp_ns, 3_000_000_000);
             let expected_host2 = 70.0_f64.exp();
             // Use relative comparison for large values
             assert!(
@@ -308,7 +318,11 @@ async fn test_floor_instant_query() {
                 "cpu_usage",
                 "cpu_usage",
             ])),
-            Arc::new(Int64Array::from(vec![1000_i64, 1000, 1000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000_i64,
+                1_000_000_000,
+                1_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![3.7, -1.2, 5.0])),
             Arc::new(StringArray::from(vec!["host1", "host2", "host3"])),
             Arc::new(StringArray::from(vec!["n", "n", "n"])),
@@ -434,7 +448,7 @@ fn make_fractional_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["cpu_usage", "cpu_usage"])),
-            Arc::new(Int64Array::from(vec![3000_i64, 3000_i64])),
+            Arc::new(Int64Array::from(vec![3_000_000_000_i64, 3_000_000_000_i64])),
             Arc::new(Float64Array::from(vec![1.2_f64, -1.7_f64])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
             Arc::new(StringArray::from(vec!["node_exporter", "node_exporter"])),

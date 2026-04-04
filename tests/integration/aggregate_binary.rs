@@ -86,7 +86,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 1: instance=host1, job=webserver, rate = 10 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push((i as f64) * 10.0);
         instances.push("host1");
         jobs.push("webserver");
@@ -95,7 +95,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 2: instance=host2, job=webserver, rate = 20 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push((i as f64) * 20.0);
         instances.push("host2");
         jobs.push("webserver");
@@ -104,7 +104,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 3: instance=host3, job=api, rate = 5 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push((i as f64) * 5.0);
         instances.push("host3");
         jobs.push("api");
@@ -150,19 +150,19 @@ fn make_gauge_source() -> MultiMetricSource {
 
     for (i, &v) in host1_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push(v);
         instances.push("host1");
     }
     for (i, &v) in host2_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push(v);
         instances.push("host2");
     }
     for (i, &v) in host3_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push(v);
         instances.push("host3");
     }
@@ -200,7 +200,7 @@ fn make_two_metric_source() -> MultiMetricSource {
         Arc::clone(&schema_a),
         vec![
             Arc::new(StringArray::from(vec!["metric_a", "metric_a"])),
-            Arc::new(Int64Array::from(vec![5000, 5000])),
+            Arc::new(Int64Array::from(vec![5_000_000_000_i64, 5_000_000_000_i64])),
             Arc::new(Float64Array::from(vec![100.0, 200.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -218,7 +218,7 @@ fn make_two_metric_source() -> MultiMetricSource {
         Arc::clone(&schema_b),
         vec![
             Arc::new(StringArray::from(vec!["metric_b", "metric_b"])),
-            Arc::new(Int64Array::from(vec![5000, 5000])),
+            Arc::new(Int64Array::from(vec![5_000_000_000_i64, 5_000_000_000_i64])),
             Arc::new(Float64Array::from(vec![10.0, 20.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],

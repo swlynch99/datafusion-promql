@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use clap::Parser;
 
 use datafusion_promql::PromqlEngine;
@@ -19,11 +19,11 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Start timestamp in milliseconds (for range queries)
+    /// Start timestamp in nanoseconds (for range queries)
     #[arg(long)]
     start: Option<i64>,
 
-    /// End timestamp in milliseconds (for range queries)
+    /// End timestamp in nanoseconds (for range queries)
     #[arg(long)]
     end: Option<i64>,
 
@@ -31,7 +31,7 @@ struct Cli {
     #[arg(long, default_value = "15")]
     step: u64,
 
-    /// Evaluation timestamp in milliseconds (for instant queries)
+    /// Evaluation timestamp in nanoseconds (for instant queries)
     #[arg(short, long)]
     timestamp: Option<i64>,
 
@@ -128,8 +128,8 @@ fn plot_matrix(
     val_min -= padding;
     val_max += padding;
 
-    let dt_min = Utc.timestamp_millis_opt(ts_min).unwrap();
-    let dt_max = Utc.timestamp_millis_opt(ts_max).unwrap();
+    let dt_min = DateTime::from_timestamp_nanos(ts_min);
+    let dt_max = DateTime::from_timestamp_nanos(ts_max);
 
     let root = BitMapBackend::new(output, (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
@@ -154,7 +154,7 @@ fn plot_matrix(
         let points: Vec<(DateTime<Utc>, f64)> = s
             .samples
             .iter()
-            .map(|&(ts, val)| (Utc.timestamp_millis_opt(ts).unwrap(), val))
+            .map(|&(ts, val)| (DateTime::from_timestamp_nanos(ts), val))
             .collect();
 
         chart
@@ -239,27 +239,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
-    let result = if let Some(ts_ms) = cli.timestamp {
+    let result = if let Some(ts_ns) = cli.timestamp {
         // Instant query.
-        let ts = Utc
-            .timestamp_millis_opt(ts_ms)
-            .single()
-            .ok_or_else(|| format!("invalid timestamp: {ts_ms}"))?;
+        let ts = DateTime::from_timestamp_nanos(ts_ns);
         println!("Executing instant query at {ts}...");
         let r = engine.instant_query(&cli.query, ts).await?;
         println!("Plotting instant vector...");
         plot_vector(&r, &cli.query, &cli.output, cli.width, cli.height)?;
         r
-    } else if let (Some(start_ms), Some(end_ms)) = (cli.start, cli.end) {
+    } else if let (Some(start_ns), Some(end_ns)) = (cli.start, cli.end) {
         // Range query.
-        let start = Utc
-            .timestamp_millis_opt(start_ms)
-            .single()
-            .ok_or_else(|| format!("invalid start timestamp: {start_ms}"))?;
-        let end = Utc
-            .timestamp_millis_opt(end_ms)
-            .single()
-            .ok_or_else(|| format!("invalid end timestamp: {end_ms}"))?;
+        let start = DateTime::from_timestamp_nanos(start_ns);
+        let end = DateTime::from_timestamp_nanos(end_ns);
         let step = std::time::Duration::from_secs(cli.step);
         println!("Executing range query [{start} .. {end}] step {step:?}...");
         let r = engine.range_query(&cli.query, start, end, step).await?;
@@ -281,7 +272,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!(
                     "  {} @ {} = {}",
                     format_labels(&s.labels),
-                    s.timestamp_ms,
+                    s.timestamp_ns,
                     s.value
                 );
             }

@@ -58,7 +58,7 @@ fn make_source(values: Vec<f64>) -> InMemoryMetricSource {
 
     let n = values.len();
     let names: Vec<&str> = (0..n).map(|_| "cpu_usage").collect();
-    let timestamps: Vec<i64> = (0..n).map(|_| 1000).collect();
+    let timestamps: Vec<i64> = (0..n).map(|_| 1_000_000_000).collect();
     let instances: Vec<String> = (0..n).map(|i| format!("host{}", i + 1)).collect();
     let instance_refs: Vec<&str> = instances.iter().map(|s| s.as_str()).collect();
 

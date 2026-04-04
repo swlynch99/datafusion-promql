@@ -63,16 +63,18 @@ impl PromqlPlanner {
         timestamp: DateTime<Utc>,
     ) -> Result<datafusion::logical_expr::LogicalPlan> {
         let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
-        let ts_ms = timestamp.timestamp_millis();
+        let ts_ns = timestamp
+            .timestamp_nanos_opt()
+            .expect("timestamp out of range for nanoseconds");
         let time_range = TimeRange {
-            start_ms: ts_ms,
-            end_ms: ts_ms,
+            start_ns: ts_ns,
+            end_ns: ts_ns,
         };
         let params = EvalParams {
-            eval_ts_ms: Some(ts_ms),
-            start_ms: ts_ms,
-            end_ms: ts_ms,
-            step_ms: 1,
+            eval_ts_ns: Some(ts_ns),
+            start_ns: ts_ns,
+            end_ns: ts_ns,
+            step_ns: 1,
         };
         plan_expr(&expr, self.source.as_ref(), time_range, params).await
     }
@@ -86,15 +88,19 @@ impl PromqlPlanner {
         step: std::time::Duration,
     ) -> Result<datafusion::logical_expr::LogicalPlan> {
         let expr = promql_parser::parser::parse(query).map_err(PromqlError::Parse)?;
-        let start_ms = start.timestamp_millis();
-        let end_ms = end.timestamp_millis();
-        let step_ms = step.as_millis() as i64;
-        let time_range = TimeRange { start_ms, end_ms };
+        let start_ns = start
+            .timestamp_nanos_opt()
+            .expect("start timestamp out of range for nanoseconds");
+        let end_ns = end
+            .timestamp_nanos_opt()
+            .expect("end timestamp out of range for nanoseconds");
+        let step_ns = step.as_nanos() as i64;
+        let time_range = TimeRange { start_ns, end_ns };
         let params = EvalParams {
-            eval_ts_ms: None,
-            start_ms,
-            end_ms,
-            step_ms,
+            eval_ts_ns: None,
+            start_ns,
+            end_ns,
+            step_ns,
         };
         plan_expr(&expr, self.source.as_ref(), time_range, params).await
     }
@@ -161,7 +167,7 @@ impl PromqlPlanner {
                 let (ts, val, labels) = extract_row(batch, row)?;
                 samples.push(InstantSample {
                     labels,
-                    timestamp_ms: ts,
+                    timestamp_ns: ts,
                     value: val,
                 });
             }

@@ -21,14 +21,14 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 #[derive(Debug)]
 pub(crate) struct InstantVectorExec {
     child: Arc<dyn ExecutionPlan>,
-    eval_ts_ms: Option<i64>,
+    eval_ts_ns: Option<i64>,
     #[allow(dead_code)]
-    start_ms: i64,
+    start_ns: i64,
     #[allow(dead_code)]
-    end_ms: i64,
+    end_ns: i64,
     #[allow(dead_code)]
-    step_ms: i64,
-    lookback_ms: i64,
+    step_ns: i64,
+    lookback_ns: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
 }
@@ -36,11 +36,11 @@ pub(crate) struct InstantVectorExec {
 impl InstantVectorExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        eval_ts_ms: Option<i64>,
-        start_ms: i64,
-        end_ms: i64,
-        step_ms: i64,
-        lookback_ms: i64,
+        eval_ts_ns: Option<i64>,
+        start_ns: i64,
+        end_ns: i64,
+        step_ns: i64,
+        lookback_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         let schema = child.schema();
@@ -52,11 +52,11 @@ impl InstantVectorExec {
         ));
         Self {
             child,
-            eval_ts_ms,
-            start_ms,
-            end_ms,
-            step_ms,
-            lookback_ms,
+            eval_ts_ns,
+            start_ns,
+            end_ns,
+            step_ns,
+            lookback_ns,
             label_columns,
             properties,
         }
@@ -64,14 +64,14 @@ impl InstantVectorExec {
 
     /// Generate the list of evaluation timestamps.
     fn eval_timestamps(&self) -> Vec<i64> {
-        if let Some(ts) = self.eval_ts_ms {
+        if let Some(ts) = self.eval_ts_ns {
             return vec![ts];
         }
         let mut timestamps = Vec::new();
-        let mut t = self.start_ms;
-        while t <= self.end_ms {
+        let mut t = self.start_ns;
+        while t <= self.end_ns {
             timestamps.push(t);
-            t += self.step_ms;
+            t += self.step_ns;
         }
         timestamps
     }
@@ -114,11 +114,11 @@ impl ExecutionPlan for InstantVectorExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.eval_ts_ms,
-            self.start_ms,
-            self.end_ms,
-            self.step_ms,
-            self.lookback_ms,
+            self.eval_ts_ns,
+            self.start_ns,
+            self.end_ns,
+            self.step_ns,
+            self.lookback_ns,
             self.label_columns.clone(),
         )))
     }
@@ -131,7 +131,7 @@ impl ExecutionPlan for InstantVectorExec {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let schema = self.schema();
         let eval_timestamps = self.eval_timestamps();
-        let lookback_ms = self.lookback_ms;
+        let lookback_ns = self.lookback_ns;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
@@ -198,7 +198,7 @@ impl ExecutionPlan for InstantVectorExec {
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                let window_start = eval_ts - lookback_ms;
+                let window_start = eval_ts - lookback_ns;
                 for (key, samples) in &series_map {
                     // Binary search for the last sample <= eval_ts.
                     let pos = samples.partition_point(|(ts, _)| *ts <= eval_ts);

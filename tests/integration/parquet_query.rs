@@ -7,12 +7,13 @@ use datafusion_promql::datasource::MetricSource;
 use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::QueryResult;
 
-/// Timestamp range of the test parquet file (nanoseconds converted to millis).
-/// Data spans roughly 1750106216002 .. 1750106506001 (about 290 seconds).
+/// Timestamp range of the test parquet file (millisecond precision, used to
+/// construct DateTime objects for the API).
+/// Data spans roughly 1750106216002 .. 1750106506001 ms (about 290 seconds).
 const DATA_START_MS: i64 = 1_750_106_216_002;
 const _DATA_END_MS: i64 = 1_750_106_506_001;
 
-/// Pick a timestamp in the middle of the data range.
+/// Pick a timestamp in the middle of the data range (milliseconds for DateTime construction).
 const MID_TS_MS: i64 = 1_750_106_360_000;
 
 fn mid_timestamp() -> chrono::DateTime<chrono::Utc> {

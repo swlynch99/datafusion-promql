@@ -35,11 +35,11 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
             let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
             let exec = InstantVectorExec::new(
                 child,
-                eval.eval_ts_ms,
-                eval.start_ms,
-                eval.end_ms,
-                eval.step_ms,
-                eval.lookback_ms,
+                eval.eval_ts_ns,
+                eval.start_ns,
+                eval.end_ns,
+                eval.step_ns,
+                eval.lookback_ns,
                 eval.label_columns.clone(),
             );
             return Ok(Some(Arc::new(exec)));
@@ -49,12 +49,12 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
             let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
             let exec = RangeVectorExec::new(
                 child,
-                eval.range_ms,
+                eval.range_ns,
                 eval.func,
-                eval.eval_ts_ms,
-                eval.start_ms,
-                eval.end_ms,
-                eval.step_ms,
+                eval.eval_ts_ns,
+                eval.start_ns,
+                eval.end_ns,
+                eval.step_ns,
                 eval.label_columns.clone(),
             );
             return Ok(Some(Arc::new(exec)));

@@ -20,12 +20,12 @@ use crate::func::RangeFunction;
 #[derive(Debug)]
 pub(crate) struct RangeVectorExec {
     child: Arc<dyn ExecutionPlan>,
-    range_ms: i64,
+    range_ns: i64,
     func: RangeFunction,
-    eval_ts_ms: Option<i64>,
-    start_ms: i64,
-    end_ms: i64,
-    step_ms: i64,
+    eval_ts_ns: Option<i64>,
+    start_ns: i64,
+    end_ns: i64,
+    step_ns: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
 }
@@ -34,12 +34,12 @@ impl RangeVectorExec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        range_ms: i64,
+        range_ns: i64,
         func: RangeFunction,
-        eval_ts_ms: Option<i64>,
-        start_ms: i64,
-        end_ms: i64,
-        step_ms: i64,
+        eval_ts_ns: Option<i64>,
+        start_ns: i64,
+        end_ns: i64,
+        step_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         let schema = child.schema();
@@ -51,26 +51,26 @@ impl RangeVectorExec {
         ));
         Self {
             child,
-            range_ms,
+            range_ns,
             func,
-            eval_ts_ms,
-            start_ms,
-            end_ms,
-            step_ms,
+            eval_ts_ns,
+            start_ns,
+            end_ns,
+            step_ns,
             label_columns,
             properties,
         }
     }
 
     fn eval_timestamps(&self) -> Vec<i64> {
-        if let Some(ts) = self.eval_ts_ms {
+        if let Some(ts) = self.eval_ts_ns {
             return vec![ts];
         }
         let mut timestamps = Vec::new();
-        let mut t = self.start_ms;
-        while t <= self.end_ms {
+        let mut t = self.start_ns;
+        while t <= self.end_ns {
             timestamps.push(t);
-            t += self.step_ms;
+            t += self.step_ns;
         }
         timestamps
     }
@@ -80,8 +80,8 @@ impl DisplayAs for RangeVectorExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "RangeVectorExec: func={}, range={}ms",
-            self.func, self.range_ms
+            "RangeVectorExec: func={}, range={}ns",
+            self.func, self.range_ns
         )
     }
 }
@@ -117,12 +117,12 @@ impl ExecutionPlan for RangeVectorExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.range_ms,
+            self.range_ns,
             self.func,
-            self.eval_ts_ms,
-            self.start_ms,
-            self.end_ms,
-            self.step_ms,
+            self.eval_ts_ns,
+            self.start_ns,
+            self.end_ns,
+            self.step_ns,
             self.label_columns.clone(),
         )))
     }
@@ -135,7 +135,7 @@ impl ExecutionPlan for RangeVectorExec {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let schema = self.schema();
         let eval_timestamps = self.eval_timestamps();
-        let range_ms = self.range_ms;
+        let range_ns = self.range_ns;
         let func = self.func;
         let label_columns = self.label_columns.clone();
 
@@ -196,14 +196,14 @@ impl ExecutionPlan for RangeVectorExec {
             }
 
             // For each eval timestamp and each series, collect samples in
-            // [t - range_ms, t] and apply the range function.
+            // [t - range_ns, t] and apply the range function.
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                let window_start = eval_ts - range_ms;
+                let window_start = eval_ts - range_ns;
                 for (key, samples) in &series_map {
                     // Find samples within [window_start, eval_ts].
                     let start_idx = samples.partition_point(|(ts, _)| *ts < window_start);
