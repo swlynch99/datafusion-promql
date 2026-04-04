@@ -10,10 +10,22 @@ pub const METRIC_NAME_LABEL: &str = "__name__";
 pub const DEFAULT_LOOKBACK_NS: i64 = 300_000_000_000;
 
 /// A time range in nanoseconds since epoch.
+///
+/// When a bound is `None`, no constraint is applied on that side.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeRange {
-    pub start_ns: i64,
-    pub end_ns: i64,
+    pub start_ns: Option<i64>,
+    pub end_ns: Option<i64>,
+}
+
+impl TimeRange {
+    /// A time range with no constraints (no timestamp filters will be added).
+    pub fn unbounded() -> Self {
+        Self {
+            start_ns: None,
+            end_ns: None,
+        }
+    }
 }
 
 /// The result of a PromQL query.

@@ -106,10 +106,10 @@ pub(crate) async fn plan_vector_selector(
     // Expand the time range to include the lookback window (and any extra
     // range duration for range vectors) so downstream nodes have enough data.
     let expanded_range = TimeRange {
-        start_ns: time_range
-            .start_ns
-            .saturating_sub(crate::types::DEFAULT_LOOKBACK_NS)
-            .saturating_sub(extra_range_ns),
+        start_ns: time_range.start_ns.map(|s| {
+            s.saturating_sub(crate::types::DEFAULT_LOOKBACK_NS)
+                .saturating_sub(extra_range_ns)
+        }),
         end_ns: time_range.end_ns,
     };
 
@@ -130,15 +130,20 @@ pub(crate) async fn plan_vector_selector(
                 &ds_matchers,
             )?;
 
-            // Apply time range filter and sort on the normalized output.
+            // Apply time range filter (if bounded) and sort on the normalized output.
             // Use Int64 literals directly since the normalized timestamp is always Int64 ns.
-            let plan = LogicalPlanBuilder::from(plan)
-                .filter(
-                    col("timestamp")
-                        .gt_eq(lit(expanded_range.start_ns))
-                        .and(col("timestamp").lt_eq(lit(expanded_range.end_ns))),
-                )
-                .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+            let mut builder = LogicalPlanBuilder::from(plan);
+            if let Some(start) = expanded_range.start_ns {
+                builder = builder
+                    .filter(col("timestamp").gt_eq(lit(start)))
+                    .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
+            }
+            if let Some(end) = expanded_range.end_ns {
+                builder = builder
+                    .filter(col("timestamp").lt_eq(lit(end)))
+                    .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
+            }
+            let plan = builder
                 .sort(vec![col("timestamp").sort(true, false)])
                 .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
                 .build()
@@ -171,16 +176,23 @@ pub(crate) async fn plan_vector_selector(
         })
         .map_err(|e| PromqlError::Plan(format!("failed to apply filter: {e}")))?;
 
-    // Apply time range filter on the expanded range.
-    let plan = plan
-        .filter(
-            col("timestamp")
-                .gt_eq(timestamp_lit(&provider_schema, expanded_range.start_ns))
-                .and(
-                    col("timestamp").lt_eq(timestamp_lit(&provider_schema, expanded_range.end_ns)),
-                ),
+    // Apply time range filter on the expanded range (skip if unbounded).
+    let plan = if let Some(start) = expanded_range.start_ns {
+        plan.filter(
+            col("timestamp").gt_eq(timestamp_lit(&provider_schema, start)),
         )
-        .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
+        .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+    } else {
+        plan
+    };
+    let plan = if let Some(end) = expanded_range.end_ns {
+        plan.filter(
+            col("timestamp").lt_eq(timestamp_lit(&provider_schema, end)),
+        )
+        .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+    } else {
+        plan
+    };
 
     // Sort by timestamp for the InstantVectorEval node.
     let plan = plan
