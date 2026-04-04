@@ -10,11 +10,12 @@ use datafusion::optimizer::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 
 use crate::func::range_udaf::make_range_udaf;
-use crate::node::RangeVectorEval;
+use crate::node::{RangeFunctionEval, RangeVectorEval};
 
-/// Optimizer rule that rewrites `RangeVectorEval` extension nodes into
-/// standard DataFusion plans: a cross join with evaluation timestamps,
-/// a time-window filter, and a group-by aggregate using a range-function UDAF.
+/// Optimizer rule that rewrites a `RangeFunctionEval` wrapping a
+/// `RangeVectorEval` into standard DataFusion plans: a cross join with
+/// evaluation timestamps, a time-window filter, and a group-by aggregate
+/// using a range-function UDAF.
 ///
 /// This decomposition lets DataFusion's built-in optimizers handle sort
 /// elimination, predicate push-down, and hash-aggregate parallelism.
@@ -39,18 +40,26 @@ impl OptimizerRule for RangeVectorToAggregation {
             return Ok(Transformed::no(plan));
         };
 
-        let Some(eval) = ext.node.as_any().downcast_ref::<RangeVectorEval>() else {
+        // Match RangeFunctionEval whose input is a RangeVectorEval.
+        let Some(func_eval) = ext.node.as_any().downcast_ref::<RangeFunctionEval>() else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let LogicalPlan::Extension(inner_ext) = &func_eval.input else {
+            return Ok(Transformed::no(plan));
+        };
+
+        let Some(eval) = inner_ext.node.as_any().downcast_ref::<RangeVectorEval>() else {
             return Ok(Transformed::no(plan));
         };
 
         let input = eval.input.clone();
         let range_ns = eval.range_ns;
-        let func = eval.func;
+        let func = func_eval.func;
         let label_columns = &eval.label_columns;
-        let input_schema = input.schema().clone();
 
-        // Capture the original output schema so we can reproduce its qualifiers.
-        let original_schema = input_schema.clone();
+        // Use the RangeFunctionEval's output schema as the target.
+        let original_schema = func_eval.output_schema.clone();
 
         // Generate evaluation timestamps.
         let eval_timestamps =
@@ -58,6 +67,7 @@ impl OptimizerRule for RangeVectorToAggregation {
 
         // Step 1: Rename "timestamp" in input to "sample_ts" to avoid collision
         // with the eval_ts column we're about to introduce.
+        let input_schema = input.schema().clone();
         let mut rename_exprs: Vec<Expr> = Vec::new();
         for field in input_schema.fields() {
             let name = field.name();
