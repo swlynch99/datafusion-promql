@@ -148,16 +148,8 @@ impl Accumulator for RangeAccumulator {
             .collect();
 
         Ok(vec![
-            ScalarValue::List(ScalarValue::new_list(
-                &timestamps,
-                &DataType::Int64,
-                true,
-            )),
-            ScalarValue::List(ScalarValue::new_list(
-                &values,
-                &DataType::Float64,
-                true,
-            )),
+            ScalarValue::List(ScalarValue::new_list(&timestamps, &DataType::Int64, true)),
+            ScalarValue::List(ScalarValue::new_list(&values, &DataType::Float64, true)),
         ])
     }
 

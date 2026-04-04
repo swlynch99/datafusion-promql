@@ -53,12 +53,8 @@ impl OptimizerRule for RangeVectorToAggregation {
         let original_schema = input_schema.clone();
 
         // Generate evaluation timestamps.
-        let eval_timestamps = generate_eval_timestamps(
-            eval.eval_ts_ns,
-            eval.start_ns,
-            eval.end_ns,
-            eval.step_ns,
-        );
+        let eval_timestamps =
+            generate_eval_timestamps(eval.eval_ts_ns, eval.start_ns, eval.end_ns, eval.step_ns);
 
         // Step 1: Rename "timestamp" in input to "sample_ts" to avoid collision
         // with the eval_ts column we're about to introduce.
@@ -83,8 +79,7 @@ impl OptimizerRule for RangeVectorToAggregation {
             vec![Field::new("eval_ts", DataType::Int64, false)].into(),
             std::collections::HashMap::new(),
         )?);
-        let values_rows: Vec<Vec<Expr>> =
-            eval_timestamps.iter().map(|ts| vec![lit(*ts)]).collect();
+        let values_rows: Vec<Vec<Expr>> = eval_timestamps.iter().map(|ts| vec![lit(*ts)]).collect();
         let values_plan = LogicalPlan::Values(Values {
             schema: values_schema,
             values: values_rows,
