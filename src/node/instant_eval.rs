@@ -88,14 +88,19 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "InstantVectorEval: ts={ts}, lookback={}ns",
-                self.lookback_ns
+                "InstantVectorEval: ts={ts}, lookback={}ns, group_by=[{}]",
+                self.lookback_ns,
+                self.label_columns.join(", ")
             )
         } else {
             write!(
                 f,
-                "InstantVectorEval: range=[{}, {}], step={}ns, lookback={}ns",
-                self.start_ns, self.end_ns, self.step_ns, self.lookback_ns
+                "InstantVectorEval: range=[{}, {}], step={}ns, lookback={}ns, group_by=[{}]",
+                self.start_ns,
+                self.end_ns,
+                self.step_ns,
+                self.lookback_ns,
+                self.label_columns.join(", ")
             )
         }
     }

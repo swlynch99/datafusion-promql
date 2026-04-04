@@ -95,14 +95,21 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "RangeVectorEval: func={}, ts={ts}, range={}ns",
-                self.func, self.range_ns
+                "RangeVectorEval: func={}, ts={ts}, range={}ns, group_by=[{}]",
+                self.func,
+                self.range_ns,
+                self.label_columns.join(", ")
             )
         } else {
             write!(
                 f,
-                "RangeVectorEval: func={}, range=[{}, {}], step={}ns, window={}ns",
-                self.func, self.start_ns, self.end_ns, self.step_ns, self.range_ns
+                "RangeVectorEval: func={}, range=[{}, {}], step={}ns, window={}ns, group_by=[{}]",
+                self.func,
+                self.start_ns,
+                self.end_ns,
+                self.step_ns,
+                self.range_ns,
+                self.label_columns.join(", ")
             )
         }
     }
