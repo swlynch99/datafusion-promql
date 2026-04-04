@@ -1409,6 +1409,7 @@ dependencies = [
  "futures",
  "parquet",
  "promql-parser",
+ "regex",
  "rgb",
  "terminal_size",
  "textplots",

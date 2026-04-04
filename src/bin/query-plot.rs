@@ -19,11 +19,11 @@ struct Cli {
     /// The PromQL query
     query: String,
 
-    /// Start timestamp in nanoseconds (for range queries)
+    /// Start timestamp in unix seconds (for range queries)
     #[arg(long)]
     start: Option<i64>,
 
-    /// End timestamp in nanoseconds (for range queries)
+    /// End timestamp in unix seconds (for range queries)
     #[arg(long)]
     end: Option<i64>,
 
@@ -31,7 +31,7 @@ struct Cli {
     #[arg(long, default_value = "15")]
     step: u64,
 
-    /// Evaluation timestamp in nanoseconds (for instant queries)
+    /// Evaluation timestamp in unix seconds (for instant queries)
     #[arg(short, long)]
     timestamp: Option<i64>,
 
@@ -235,16 +235,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
-    if let Some(ts_ns) = cli.timestamp {
+    const NS_PER_SEC: i64 = 1_000_000_000;
+
+    if let Some(ts_secs) = cli.timestamp {
         // Instant query.
-        let ts = DateTime::from_timestamp_nanos(ts_ns);
+        let ts = DateTime::from_timestamp_nanos(ts_secs * NS_PER_SEC);
         eprintln!("Executing instant query at {ts}...");
         let result = engine.instant_query(&cli.query, ts).await?;
         plot_vector(&result, &cli.query, width, height)?;
     } else if cli.start.is_some() || cli.end.is_some() {
         // Range query: fill in missing bounds from parquet metadata.
-        let start_ns = cli.start.unwrap_or(auto_min_ns);
-        let end_ns = cli.end.unwrap_or(auto_max_ns);
+        let start_ns = cli.start.map(|s| s * NS_PER_SEC).unwrap_or(auto_min_ns);
+        let end_ns = cli.end.map(|e| e * NS_PER_SEC).unwrap_or(auto_max_ns);
         let start = DateTime::from_timestamp_nanos(start_ns);
         let end = DateTime::from_timestamp_nanos(end_ns);
         let step = std::time::Duration::from_secs(cli.step);

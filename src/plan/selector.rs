@@ -73,11 +73,15 @@ fn convert_matchers(matchers: &[Matcher]) -> Vec<datasource::Matcher> {
 /// `extra_range_ns` extends the time range expansion beyond the default lookback.
 /// This is used for range vectors where the window may be larger than the
 /// default 5-minute lookback.
+///
+/// `offset_ns` shifts the data fetch window. Positive values shift the window
+/// into the past (need older data), negative values shift toward the future.
 pub(crate) async fn plan_vector_selector(
     vs: &VectorSelector,
     source: &dyn MetricSource,
     time_range: TimeRange,
     extra_range_ns: i64,
+    offset_ns: i64,
 ) -> Result<(LogicalPlan, Vec<String>)> {
     let metric_name = vs
         .name
@@ -103,14 +107,24 @@ pub(crate) async fn plan_vector_selector(
         .collect();
     let ds_matchers = convert_matchers(&non_name_matchers);
 
-    // Expand the time range to include the lookback window (and any extra
-    // range duration for range vectors) so downstream nodes have enough data.
+    // Expand the time range to include the lookback window, any extra range
+    // duration for range vectors, and the offset so downstream nodes have
+    // enough data.
+    //
+    // A positive offset means we look further into the past, so we expand
+    // start_ns. A negative offset means we look toward the future, so we
+    // expand end_ns.
+    let offset_expand_start = offset_ns.max(0);
+    let offset_expand_end = (-offset_ns).max(0);
     let expanded_range = TimeRange {
         start_ns: time_range.start_ns.map(|s| {
             s.saturating_sub(crate::types::DEFAULT_LOOKBACK_NS)
                 .saturating_sub(extra_range_ns)
+                .saturating_sub(offset_expand_start)
         }),
-        end_ns: time_range.end_ns,
+        end_ns: time_range
+            .end_ns
+            .map(|e| e.saturating_add(offset_expand_end)),
     };
 
     let (provider, format) = source
