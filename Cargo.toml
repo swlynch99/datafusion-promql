@@ -27,11 +27,13 @@ thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
 tokio = { version = "1", features = ["full"] }
-plotters = { version = "0.3", optional = true }
+textplots = { version = "0.8", optional = true }
+rgb = { version = "0.8", optional = true }
+terminal_size = { version = "0.4", optional = true }
 
 [features]
 parquet = ["datafusion/parquet"]
-plot = ["parquet", "plotters"]
+plot = ["parquet", "textplots", "rgb", "terminal_size"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
