@@ -6,7 +6,7 @@ datafusion-promql. Functions are grouped by category.
 ## Currently Implemented
 
 - **Range vector functions:** `rate`, `irate`, `increase`, `delta`
-- **Aggregation operators:** `sum`, `avg`, `count`, `min`, `max`
+- **Aggregation operators:** `sum`, `avg`, `count`, `min`, `max`, `stddev`, `stdvar`, `group`, `topk`, `bottomk`, `quantile`, `count_values`
 - **Binary operators:** `+`, `-`, `*`, `/`, `%`, `^`, `==`, `!=`, `<`, `>`, `<=`, `>=`
 - **Set operators:** `and`, `or`, `unless`
 
@@ -131,15 +131,8 @@ These aggregate across series, grouping by `by(...)` or `without(...)` clauses.
 
 | Function | Description |
 |----------|-------------|
-| `topk` | Returns the top K elements by value. Unlike other aggregators, the result preserves the original labels (no grouping collapse). |
-| `bottomk` | Returns the bottom K elements by value. Same label-preservation semantics as `topk`. |
-| `quantile` | Calculate the φ-quantile (0 ≤ φ ≤ 1) over the grouped values. |
-| `count_values` | Count the number of elements with the same value. Takes a string parameter used as the label name for the value. |
-| `stddev` | Population standard deviation over the grouped values. |
-| `stdvar` | Population variance over the grouped values. |
-| `group` | Groups series together — all resulting values are 1. Useful for enumerating label combinations. |
-| `limitk` | Limit to K arbitrary series from each group. |
-| `limit_ratio` | Sample a ratio (0.0–1.0) of series from each group. |
+| `limitk` | Limit to K arbitrary series from each group. (Planner ready, but promql-parser 0.8 grammar does not support the syntax yet.) |
+| `limit_ratio` | Sample a ratio (0.0–1.0) of series from each group. (Planner ready, but promql-parser 0.8 grammar does not support the syntax yet.) |
 
 ---
 

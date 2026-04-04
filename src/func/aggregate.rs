@@ -12,6 +12,15 @@ pub(crate) enum AggregateFunction {
     Count,
     Min,
     Max,
+    Stddev,
+    Stdvar,
+    Group,
+    TopK,
+    BottomK,
+    Quantile,
+    CountValues,
+    LimitK,
+    LimitRatio,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -22,6 +31,15 @@ impl fmt::Display for AggregateFunction {
             Self::Count => write!(f, "count"),
             Self::Min => write!(f, "min"),
             Self::Max => write!(f, "max"),
+            Self::Stddev => write!(f, "stddev"),
+            Self::Stdvar => write!(f, "stdvar"),
+            Self::Group => write!(f, "group"),
+            Self::TopK => write!(f, "topk"),
+            Self::BottomK => write!(f, "bottomk"),
+            Self::Quantile => write!(f, "quantile"),
+            Self::CountValues => write!(f, "count_values"),
+            Self::LimitK => write!(f, "limitk"),
+            Self::LimitRatio => write!(f, "limit_ratio"),
         }
     }
 }
@@ -37,6 +55,15 @@ pub(crate) fn lookup_aggregate_function(op: TokenType) -> Result<AggregateFuncti
         "count" => Ok(AggregateFunction::Count),
         "min" => Ok(AggregateFunction::Min),
         "max" => Ok(AggregateFunction::Max),
+        "stddev" => Ok(AggregateFunction::Stddev),
+        "stdvar" => Ok(AggregateFunction::Stdvar),
+        "group" => Ok(AggregateFunction::Group),
+        "topk" => Ok(AggregateFunction::TopK),
+        "bottomk" => Ok(AggregateFunction::BottomK),
+        "quantile" => Ok(AggregateFunction::Quantile),
+        "count_values" => Ok(AggregateFunction::CountValues),
+        "limitk" => Ok(AggregateFunction::LimitK),
+        "limit_ratio" => Ok(AggregateFunction::LimitRatio),
         other => Err(PromqlError::NotImplemented(format!(
             "aggregation operator not yet supported: {other}"
         ))),
