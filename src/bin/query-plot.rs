@@ -4,7 +4,7 @@ use chrono::DateTime;
 use clap::Parser;
 
 use datafusion_promql::PromqlEngine;
-use datafusion_promql::parquet::ParquetMetricSource;
+use datafusion_promql::parquet::{ParquetMetricSource, read_timestamp_range};
 use datafusion_promql::types::QueryResult;
 
 use textplots::{Chart, ColorPlot, Shape};
@@ -229,6 +229,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let width = cli.width.unwrap_or(term_w);
     let height = cli.height.unwrap_or(term_h);
 
+    // Auto-detect timestamp range from parquet metadata when not provided.
+    let (auto_min_ns, auto_max_ns) = read_timestamp_range(&cli.file)?;
+
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
@@ -240,19 +243,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Executing instant query at {ts}...");
         let result = engine.instant_query(&cli.query, ts).await?;
         plot_vector(&result, &cli.query, width, height)?;
-    } else if let (Some(start_secs), Some(end_secs)) = (cli.start, cli.end) {
-        // Range query.
-        let start = DateTime::from_timestamp_nanos(start_secs * NS_PER_SEC);
-        let end = DateTime::from_timestamp_nanos(end_secs * NS_PER_SEC);
+    } else if cli.start.is_some() || cli.end.is_some() {
+        // Range query: fill in missing bounds from parquet metadata.
+        let start_ns = cli.start.map(|s| s * NS_PER_SEC).unwrap_or(auto_min_ns);
+        let end_ns = cli.end.map(|e| e * NS_PER_SEC).unwrap_or(auto_max_ns);
+        let start = DateTime::from_timestamp_nanos(start_ns);
+        let end = DateTime::from_timestamp_nanos(end_ns);
         let step = std::time::Duration::from_secs(cli.step);
         eprintln!("Executing range query [{start} .. {end}] step {step:?}...");
         let result = engine.range_query(&cli.query, start, end, step).await?;
         plot_matrix(&result, &cli.query, width, height)?;
     } else {
-        return Err(
-            "provide either --timestamp for instant queries, or --start and --end for range queries"
-                .into(),
-        );
+        // No timestamp flags: default to range query over the full data.
+        let start = DateTime::from_timestamp_nanos(auto_min_ns);
+        let end = DateTime::from_timestamp_nanos(auto_max_ns);
+        let step = std::time::Duration::from_secs(cli.step);
+        eprintln!("No timestamps specified; using range from parquet metadata: [{start} .. {end}]");
+        let result = engine.range_query(&cli.query, start, end, step).await?;
+        plot_matrix(&result, &cli.query, width, height)?;
     };
 
     Ok(())
