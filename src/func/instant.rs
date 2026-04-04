@@ -33,11 +33,18 @@ pub(crate) enum InstantFunction {
     /// Round each sample value up to the nearest integer.
     Ceil,
     /// Clamp each sample value to the range `[min, max]`.
-    Clamp { min: f64, max: f64 },
+    Clamp {
+        min: f64,
+        max: f64,
+    },
     /// Clamp each sample value to have a maximum of the given scalar.
-    ClampMax { max: f64 },
+    ClampMax {
+        max: f64,
+    },
     /// Clamp each sample value to have a minimum of the given scalar.
-    ClampMin { min: f64 },
+    ClampMin {
+        min: f64,
+    },
     /// Cosine of each sample value (radians).
     Cos,
     /// Hyperbolic cosine of each sample value.
@@ -536,9 +543,9 @@ impl ScalarUDFImpl for PromqlClampMinUdf {
         let min = self.min;
 
         match arg {
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.max(min)))))
-            }
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(v.max(min))),
+            )),
             ColumnarValue::Array(array) => {
                 let result = array
                     .as_primitive::<Float64Type>()
@@ -606,9 +613,9 @@ impl ScalarUDFImpl for PromqlClampMaxUdf {
         let max = self.max;
 
         match arg {
-            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(Some(v.min(max)))))
-            }
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(v.min(max))),
+            )),
             ColumnarValue::Array(array) => {
                 let result = array
                     .as_primitive::<Float64Type>()
