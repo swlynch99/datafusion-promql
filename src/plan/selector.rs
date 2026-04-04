@@ -157,8 +157,16 @@ pub(crate) async fn plan_vector_selector(
                     .filter(col("timestamp").lt_eq(lit(end)))
                     .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
             }
+            // Sort by label columns first (to group series together), then by
+            // timestamp within each series. This ensures downstream exec nodes
+            // receive data ordered by timestamp within each partition/series.
+            let mut sort_exprs: Vec<datafusion::logical_expr::expr::Sort> = label_columns
+                .iter()
+                .map(|l| col(l.as_str()).sort(true, false))
+                .collect();
+            sort_exprs.push(col("timestamp").sort(true, false));
             let plan = builder
-                .sort(vec![col("timestamp").sort(true, false)])
+                .sort(sort_exprs)
                 .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
                 .build()
                 .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
@@ -204,9 +212,16 @@ pub(crate) async fn plan_vector_selector(
         plan
     };
 
-    // Sort by timestamp for the InstantVectorEval node.
+    // Sort by label columns first (to group series together), then by
+    // timestamp within each series. This ensures downstream exec nodes
+    // receive data ordered by timestamp within each partition/series.
+    let mut sort_exprs: Vec<datafusion::logical_expr::expr::Sort> = label_columns
+        .iter()
+        .map(|l| col(l.as_str()).sort(true, false))
+        .collect();
+    sort_exprs.push(col("timestamp").sort(true, false));
     let plan = plan
-        .sort(vec![col("timestamp").sort(true, false)])
+        .sort(sort_exprs)
         .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?;
 
     let plan = plan

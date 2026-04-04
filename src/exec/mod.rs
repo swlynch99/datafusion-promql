@@ -12,10 +12,14 @@ pub(crate) use step_eval::StepVectorExec;
 
 use std::sync::Arc;
 
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use datafusion::error::Result;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::UserDefinedLogicalNode;
+use datafusion::physical_expr::{
+    LexRequirement, OrderingRequirements, PhysicalSortRequirement, expressions::Column,
+};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
@@ -139,4 +143,41 @@ fn coalesce_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     } else {
         plan
     }
+}
+
+/// Build an [`OrderingRequirements`] that requests input sorted by the given
+/// label columns (ASC NULLS LAST) followed by `timestamp` (ASC NULLS LAST).
+///
+/// Returns `None` if the `timestamp` column is not found in the schema (which
+/// would indicate a programming error upstream, but we avoid panicking here).
+pub(crate) fn label_timestamp_ordering(
+    label_columns: &[String],
+    schema: &SchemaRef,
+) -> Option<OrderingRequirements> {
+    let asc_nulls_last = arrow::compute::SortOptions {
+        descending: false,
+        nulls_first: false,
+    };
+
+    let mut reqs: Vec<PhysicalSortRequirement> = Vec::with_capacity(label_columns.len() + 1);
+
+    for label in label_columns {
+        if let Ok(col) = Column::new_with_schema(label, schema.as_ref()) {
+            reqs.push(PhysicalSortRequirement::new(
+                Arc::new(col),
+                Some(asc_nulls_last),
+            ));
+        }
+    }
+
+    if let Ok(ts_col) = Column::new_with_schema("timestamp", schema.as_ref()) {
+        reqs.push(PhysicalSortRequirement::new(
+            Arc::new(ts_col),
+            Some(asc_nulls_last),
+        ));
+    } else {
+        return None;
+    }
+
+    LexRequirement::new(reqs).map(OrderingRequirements::new)
 }
