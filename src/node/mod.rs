@@ -10,7 +10,7 @@ pub(crate) use binary_eval::{
     BinaryEval, BinaryOp, MatchCardinality, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 pub(crate) use datetime_function::DateTimeFunctionNode;
-pub(crate) use instant_eval::InstantVectorEval;
+pub use instant_eval::InstantVectorEval;
 pub(crate) use instant_function::InstantFunction;
 pub(crate) use range_eval::RangeVectorEval;
 pub(crate) use range_func_eval::RangeFunctionEval;
