@@ -26,6 +26,7 @@ async-trait = "0.1"
 thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
+regex = "1"
 tokio = { version = "1", features = ["full"] }
 textplots = { version = "0.8", optional = true }
 rgb = { version = "0.8", optional = true }

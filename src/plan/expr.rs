@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::common::Column;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{
@@ -20,7 +21,8 @@ use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
     AggregateFunction, datetime_func_to_expr, is_time_function, lookup_aggregate_function,
-    lookup_datetime_function, lookup_instant_function, lookup_range_function,
+    lookup_datetime_function, lookup_instant_function, lookup_range_function, make_label_join_udf,
+    make_label_replace_udf,
 };
 use crate::node::{
     BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
@@ -230,9 +232,211 @@ async fn plan_call(
         return plan_datetime_function(dt_func, call, source, time_range, params).await;
     }
 
+    // Check if this is a label manipulation function.
+    if func_name == "label_replace" || func_name == "label_join" {
+        return plan_label_function(call, source, time_range, params).await;
+    }
+
     Err(PromqlError::NotImplemented(format!(
         "function not yet supported: {func_name}"
     )))
+}
+
+/// Extract a string literal from a PromQL expression.
+fn extract_string_literal(expr: &Expr) -> Result<String> {
+    match expr {
+        Expr::StringLiteral(lit) => Ok(lit.val.clone()),
+        _ => Err(PromqlError::Plan(
+            "expected a string literal argument".into(),
+        )),
+    }
+}
+
+/// Plan a `label_replace` or `label_join` function call.
+///
+/// These functions modify label columns rather than the value column, so they
+/// are implemented as projections with UDFs over string columns.
+async fn plan_label_function(
+    call: &parser::Call,
+    source: &dyn MetricSource,
+    time_range: TimeRange,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    let func_name = call.func.name;
+
+    match func_name {
+        "label_replace" => {
+            // label_replace(v, dst_label, replacement, src_label, regex)
+            if call.args.args.len() != 5 {
+                return Err(PromqlError::Plan(format!(
+                    "label_replace() requires exactly 5 arguments, got {}",
+                    call.args.args.len()
+                )));
+            }
+
+            let vector_arg = &call.args.args[0];
+            let dst_label = extract_string_literal(&call.args.args[1])?;
+            let replacement = extract_string_literal(&call.args.args[2])?;
+            let src_label = extract_string_literal(&call.args.args[3])?;
+            let regex_pattern = extract_string_literal(&call.args.args[4])?;
+
+            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+
+            build_label_replace_projection(
+                child_plan,
+                &dst_label,
+                &replacement,
+                &src_label,
+                &regex_pattern,
+            )
+        }
+        "label_join" => {
+            // label_join(v, dst_label, separator, src_label_1, src_label_2, ...)
+            if call.args.args.len() < 4 {
+                return Err(PromqlError::Plan(format!(
+                    "label_join() requires at least 4 arguments, got {}",
+                    call.args.args.len()
+                )));
+            }
+
+            let vector_arg = &call.args.args[0];
+            let dst_label = extract_string_literal(&call.args.args[1])?;
+            let separator = extract_string_literal(&call.args.args[2])?;
+            let src_labels: Vec<String> = call.args.args[3..]
+                .iter()
+                .map(|a| extract_string_literal(a))
+                .collect::<Result<_>>()?;
+
+            let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+
+            build_label_join_projection(child_plan, &dst_label, &separator, &src_labels)
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Build a projection plan for `label_replace`.
+///
+/// Passes through all existing columns and adds/replaces `dst_label` with the
+/// result of applying the regex replacement on `src_label`.
+fn build_label_replace_projection(
+    child_plan: LogicalPlan,
+    dst_label: &str,
+    replacement: &str,
+    src_label: &str,
+    regex_pattern: &str,
+) -> Result<LogicalPlan> {
+    let child_schema = child_plan.schema();
+    let udf = make_label_replace_udf(replacement.to_string(), regex_pattern.to_string());
+
+    // Determine the src_label expression. If the column doesn't exist, use empty string.
+    let src_expr = if child_schema.fields().iter().any(|f| f.name() == src_label) {
+        col(src_label)
+    } else {
+        lit("").alias(src_label)
+    };
+
+    // Determine if dst_label already exists.
+    let dst_exists = child_schema.fields().iter().any(|f| f.name() == dst_label);
+
+    // The current dst value: if column exists, use it; otherwise use empty string.
+    let current_dst_expr = if dst_exists { col(dst_label) } else { lit("") };
+
+    // Build projection: pass through all columns, add/replace dst_label.
+    let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
+    for field in child_schema.fields() {
+        let name = field.name();
+        if name == dst_label {
+            // Replace with UDF result.
+            let (qualifier, child_field) = child_schema
+                .qualified_field_with_name(None, name)
+                .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+            let _col_expr =
+                datafusion::logical_expr::Expr::Column(Column::from((qualifier, child_field)));
+            let replace_expr = udf.call(vec![src_expr.clone(), current_dst_expr.clone()]);
+            exprs.push(replace_expr.alias(dst_label));
+        } else {
+            let (qualifier, child_field) = child_schema
+                .qualified_field_with_name(None, name)
+                .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+            let col_expr =
+                datafusion::logical_expr::Expr::Column(Column::from((qualifier, child_field)));
+            exprs.push(col_expr.alias(name.as_str()));
+        }
+    }
+
+    // If dst_label doesn't exist, add it as a new column.
+    if !dst_exists {
+        let replace_expr = udf.call(vec![src_expr, current_dst_expr]);
+        exprs.push(replace_expr.alias(dst_label));
+    }
+
+    LogicalPlanBuilder::from(child_plan)
+        .project(exprs)
+        .map_err(|e| PromqlError::Plan(format!("label_replace projection error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("label_replace build error: {e}")))
+}
+
+/// Build a projection plan for `label_join`.
+///
+/// Passes through all existing columns and adds/replaces `dst_label` with the
+/// concatenation of source label values joined by `separator`.
+fn build_label_join_projection(
+    child_plan: LogicalPlan,
+    dst_label: &str,
+    separator: &str,
+    src_labels: &[String],
+) -> Result<LogicalPlan> {
+    let child_schema = child_plan.schema();
+    let udf = make_label_join_udf(separator.to_string(), src_labels.len());
+
+    // Build the UDF arguments: one expression per source label.
+    let src_exprs: Vec<datafusion::logical_expr::Expr> = src_labels
+        .iter()
+        .map(|label| {
+            if child_schema
+                .fields()
+                .iter()
+                .any(|f| f.name() == label.as_str())
+            {
+                col(label.as_str())
+            } else {
+                lit("")
+            }
+        })
+        .collect();
+
+    let dst_exists = child_schema.fields().iter().any(|f| f.name() == dst_label);
+
+    // Build projection.
+    let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
+    for field in child_schema.fields() {
+        let name = field.name();
+        if name == dst_label {
+            let join_expr = udf.call(src_exprs.clone());
+            exprs.push(join_expr.alias(dst_label));
+        } else {
+            let (qualifier, child_field) = child_schema
+                .qualified_field_with_name(None, name)
+                .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+            let col_expr =
+                datafusion::logical_expr::Expr::Column(Column::from((qualifier, child_field)));
+            exprs.push(col_expr.alias(name.as_str()));
+        }
+    }
+
+    // If dst_label doesn't exist, add it.
+    if !dst_exists {
+        let join_expr = udf.call(src_exprs);
+        exprs.push(join_expr.alias(dst_label));
+    }
+
+    LogicalPlanBuilder::from(child_plan)
+        .project(exprs)
+        .map_err(|e| PromqlError::Plan(format!("label_join projection error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("label_join build error: {e}")))
 }
 
 /// Plan an aggregation expression.
