@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int64Builder, StringBuilder};
+use arrow::array::{Float64Builder, UInt64Builder, StringBuilder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
@@ -24,10 +24,10 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 #[derive(Debug)]
 pub(crate) struct StepVectorExec {
     child: Arc<dyn ExecutionPlan>,
-    start_ns: i64,
-    end_ns: i64,
-    step_ns: i64,
-    lookback_ns: i64,
+    start_ns: u64,
+    end_ns: u64,
+    step_ns: u64,
+    lookback_ns: u64,
     offset_ns: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
@@ -36,10 +36,10 @@ pub(crate) struct StepVectorExec {
 impl StepVectorExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        start_ns: i64,
-        end_ns: i64,
-        step_ns: i64,
-        lookback_ns: i64,
+        start_ns: u64,
+        end_ns: u64,
+        step_ns: u64,
+        lookback_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
@@ -63,7 +63,7 @@ impl StepVectorExec {
     }
 
     /// Generate the list of evaluation timestamps.
-    fn eval_timestamps(&self) -> Vec<i64> {
+    fn eval_timestamps(&self) -> Vec<u64> {
         let mut timestamps = Vec::new();
         let mut t = self.start_ns;
         while t <= self.end_ns {
@@ -142,7 +142,7 @@ impl ExecutionPlan for StepVectorExec {
             }
 
             // Build a map: series_key -> Vec<(timestamp, value)>
-            let mut series_map: HashMap<Vec<String>, Vec<(i64, f64)>> = HashMap::new();
+            let mut series_map: HashMap<Vec<String>, Vec<(u64, f64)>> = HashMap::new();
 
             for batch in &batches {
                 let ts_col = batch
@@ -152,8 +152,8 @@ impl ExecutionPlan for StepVectorExec {
 
                 let ts_arr = ts_col
                     .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .expect("timestamp must be Int64");
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .expect("timestamp must be UInt64");
                 let val_arr = val_col
                     .as_any()
                     .downcast_ref::<arrow::array::Float64Array>()
@@ -190,7 +190,7 @@ impl ExecutionPlan for StepVectorExec {
 
             // For each eval timestamp and each series, find the most recent
             // sample within [eval_ts - lookback, eval_ts].
-            let mut out_ts = Int64Builder::new();
+            let mut out_ts = UInt64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
@@ -199,8 +199,8 @@ impl ExecutionPlan for StepVectorExec {
                 // Apply offset: shift the lookup window into the past by offset_ns.
                 // The effective lookup time is eval_ts - offset_ns, but the
                 // result is reported at eval_ts.
-                let effective_ts = eval_ts - offset_ns;
-                let window_start = effective_ts - lookback_ns;
+                let effective_ts = (eval_ts as i64 - offset_ns) as u64;
+                let window_start = effective_ts.saturating_sub(lookback_ns);
                 for (key, samples) in &series_map {
                     // Binary search for the last sample <= effective_ts.
                     let pos = samples.partition_point(|(ts, _)| *ts <= effective_ts);

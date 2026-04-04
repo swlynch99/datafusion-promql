@@ -251,7 +251,7 @@ fn build_metric_metadata(
 ///
 /// Returns `(min_ns, max_ns)` as nanosecond timestamps. This reads only the
 /// file footer metadata — no row data is decoded.
-pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
+pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(u64, u64)> {
     let file = File::open(path.as_ref())
         .map_err(|e| PromqlError::DataSource(format!("failed to open parquet file: {e}")))?;
     let reader = SerializedFileReader::new(file)
@@ -267,8 +267,8 @@ pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
             PromqlError::DataSource("no 'timestamp' column found in parquet schema".into())
         })?;
 
-    let mut global_min: Option<i64> = None;
-    let mut global_max: Option<i64> = None;
+    let mut global_min: Option<u64> = None;
+    let mut global_max: Option<u64> = None;
 
     for rg_idx in 0..metadata.num_row_groups() {
         let rg = metadata.row_group(rg_idx);
@@ -281,10 +281,10 @@ pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
             // The timestamp column is UInt64 in the arrow schema but stored as
             // INT64 in parquet (signed). Read as bytes and reinterpret.
             if min_bytes.len() == 8 && max_bytes.len() == 8 {
-                let min_val = i64::from_le_bytes(min_bytes.try_into().unwrap());
-                let max_val = i64::from_le_bytes(max_bytes.try_into().unwrap());
-                global_min = Some(global_min.map_or(min_val, |v: i64| v.min(min_val)));
-                global_max = Some(global_max.map_or(max_val, |v: i64| v.max(max_val)));
+                let min_val = u64::from_le_bytes(min_bytes.try_into().unwrap());
+                let max_val = u64::from_le_bytes(max_bytes.try_into().unwrap());
+                global_min = Some(global_min.map_or(min_val, |v: u64| v.min(min_val)));
+                global_max = Some(global_max.map_or(max_val, |v: u64| v.max(max_val)));
             }
         }
     }

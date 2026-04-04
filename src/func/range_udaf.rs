@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray};
-use arrow::datatypes::{DataType, Field, Float64Type, Int64Type};
+use arrow::datatypes::{DataType, Field, Float64Type, UInt64Type};
 use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::function::AccumulatorArgs;
 use datafusion::logical_expr::function::StateFieldsArgs;
@@ -15,7 +15,7 @@ use super::range::RangeFunction;
 
 /// Create a DataFusion UDAF for the given range function.
 ///
-/// The UDAF takes two arguments: `timestamp` (Int64) and `value` (Float64),
+/// The UDAF takes two arguments: `timestamp` (UInt64) and `value` (Float64),
 /// accumulates `(timestamp, value)` pairs, and applies the range function
 /// (rate, irate, increase, delta) on evaluate.
 pub(crate) fn make_range_udaf(func: RangeFunction) -> Arc<AggregateUDF> {
@@ -33,7 +33,7 @@ impl RangeAggregateUdf {
     fn new(func: RangeFunction) -> Self {
         let name = format!("promql_{func}");
         let signature = Signature::new(
-            TypeSignature::Exact(vec![DataType::Int64, DataType::Float64]),
+            TypeSignature::Exact(vec![DataType::UInt64, DataType::Float64]),
             Volatility::Immutable,
         );
         Self {
@@ -82,7 +82,7 @@ impl AggregateUDFImpl for RangeAggregateUdf {
         Ok(vec![
             Arc::new(Field::new(
                 "timestamps",
-                DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                DataType::List(Arc::new(Field::new_list_field(DataType::UInt64, true))),
                 false,
             )),
             Arc::new(Field::new(
@@ -99,7 +99,7 @@ impl AggregateUDFImpl for RangeAggregateUdf {
 #[derive(Debug)]
 struct RangeAccumulator {
     func: RangeFunction,
-    samples: Vec<(i64, f64)>,
+    samples: Vec<(u64, f64)>,
 }
 
 impl RangeAccumulator {
@@ -113,7 +113,7 @@ impl RangeAccumulator {
 
 impl Accumulator for RangeAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let timestamps = values[0].as_primitive::<Int64Type>();
+        let timestamps = values[0].as_primitive::<UInt64Type>();
         let vals = values[1].as_primitive::<Float64Type>();
         for i in 0..timestamps.len() {
             if !timestamps.is_null(i) && !vals.is_null(i) {
@@ -132,14 +132,14 @@ impl Accumulator for RangeAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.samples.capacity() * std::mem::size_of::<(i64, f64)>()
+        std::mem::size_of_val(self) + self.samples.capacity() * std::mem::size_of::<(u64, f64)>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let timestamps: Vec<ScalarValue> = self
             .samples
             .iter()
-            .map(|(ts, _)| ScalarValue::Int64(Some(*ts)))
+            .map(|(ts, _)| ScalarValue::UInt64(Some(*ts)))
             .collect();
         let values: Vec<ScalarValue> = self
             .samples
@@ -148,7 +148,7 @@ impl Accumulator for RangeAccumulator {
             .collect();
 
         Ok(vec![
-            ScalarValue::List(ScalarValue::new_list(&timestamps, &DataType::Int64, true)),
+            ScalarValue::List(ScalarValue::new_list(&timestamps, &DataType::UInt64, true)),
             ScalarValue::List(ScalarValue::new_list(&values, &DataType::Float64, true)),
         ])
     }
@@ -163,7 +163,7 @@ impl Accumulator for RangeAccumulator {
             }
             let ts_arr = ts_list.value(i);
             let val_arr = val_list.value(i);
-            let ts_prim = ts_arr.as_primitive::<Int64Type>();
+            let ts_prim = ts_arr.as_primitive::<UInt64Type>();
             let val_prim = val_arr.as_primitive::<Float64Type>();
             for j in 0..ts_prim.len() {
                 if !ts_prim.is_null(j) && !val_prim.is_null(j) {

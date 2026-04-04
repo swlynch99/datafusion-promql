@@ -44,7 +44,7 @@ impl RangeFunction {
     ///
     /// Samples must be sorted by timestamp. Returns `None` if there are
     /// insufficient samples to compute a result.
-    pub fn evaluate(&self, samples: &[(i64, f64)]) -> Option<f64> {
+    pub fn evaluate(&self, samples: &[(u64, f64)]) -> Option<f64> {
         if samples.len() < 2 {
             return None;
         }
@@ -97,7 +97,7 @@ impl RangeFunction {
 ///
 /// A counter reset is detected when a value is less than the preceding value.
 /// In that case, the new value is added as-is (assuming it reset from 0).
-fn counter_increase(samples: &[(i64, f64)]) -> f64 {
+fn counter_increase(samples: &[(u64, f64)]) -> f64 {
     let mut total = 0.0;
     for i in 1..samples.len() {
         let delta = samples[i].1 - samples[i - 1].1;

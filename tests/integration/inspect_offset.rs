@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -31,7 +31,7 @@ impl OffsetTestSource {
     fn new() -> Self {
         let schema = Arc::new(Schema::new(vec![
             Field::new("__name__", DataType::Utf8, false),
-            Field::new("timestamp", DataType::Int64, false),
+            Field::new("timestamp", DataType::UInt64, false),
             Field::new("value", DataType::Float64, false),
             Field::new("instance", DataType::Utf8, false),
         ]));
@@ -40,8 +40,8 @@ impl OffsetTestSource {
             Arc::clone(&schema),
             vec![
                 Arc::new(StringArray::from(vec!["cpu", "cpu", "cpu", "cpu", "cpu"])),
-                Arc::new(Int64Array::from(vec![
-                    1_000_000_000_000i64, // t=1000s
+                Arc::new(UInt64Array::from(vec![
+                    1_000_000_000_000u64, // t=1000s
                     2_000_000_000_000,    // t=2000s
                     3_000_000_000_000,    // t=3000s
                     4_000_000_000_000,    // t=4000s

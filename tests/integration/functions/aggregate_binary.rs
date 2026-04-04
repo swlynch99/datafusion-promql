@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -70,7 +70,7 @@ impl MetricSource for MultiMetricSource {
 fn make_counter_source() -> MultiMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -86,7 +86,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 1: instance=host1, job=webserver, rate = 10 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push((i as f64) * 10.0);
         instances.push("host1");
         jobs.push("webserver");
@@ -95,7 +95,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 2: instance=host2, job=webserver, rate = 20 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push((i as f64) * 20.0);
         instances.push("host2");
         jobs.push("webserver");
@@ -104,7 +104,7 @@ fn make_counter_source() -> MultiMetricSource {
     // Series 3: instance=host3, job=api, rate = 5 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push((i as f64) * 5.0);
         instances.push("host3");
         jobs.push("api");
@@ -114,7 +114,7 @@ fn make_counter_source() -> MultiMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(instances)),
             Arc::new(StringArray::from(jobs)),
@@ -134,7 +134,7 @@ fn make_counter_source() -> MultiMetricSource {
 fn make_gauge_source() -> MultiMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -150,19 +150,19 @@ fn make_gauge_source() -> MultiMetricSource {
 
     for (i, &v) in host1_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host1");
     }
     for (i, &v) in host2_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host2");
     }
     for (i, &v) in host3_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host3");
     }
@@ -171,7 +171,7 @@ fn make_gauge_source() -> MultiMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(instances)),
         ],
@@ -191,7 +191,7 @@ fn make_gauge_source() -> MultiMetricSource {
 fn make_two_metric_source() -> MultiMetricSource {
     let schema_a = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -200,7 +200,10 @@ fn make_two_metric_source() -> MultiMetricSource {
         Arc::clone(&schema_a),
         vec![
             Arc::new(StringArray::from(vec!["metric_a", "metric_a"])),
-            Arc::new(Int64Array::from(vec![5_000_000_000_i64, 5_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                5_000_000_000_u64,
+                5_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![100.0, 200.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -209,7 +212,7 @@ fn make_two_metric_source() -> MultiMetricSource {
 
     let schema_b = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -218,7 +221,10 @@ fn make_two_metric_source() -> MultiMetricSource {
         Arc::clone(&schema_b),
         vec![
             Arc::new(StringArray::from(vec!["metric_b", "metric_b"])),
-            Arc::new(Int64Array::from(vec![5_000_000_000_i64, 5_000_000_000_i64])),
+            Arc::new(UInt64Array::from(vec![
+                5_000_000_000_u64,
+                5_000_000_000_u64,
+            ])),
             Arc::new(Float64Array::from(vec![10.0, 20.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],

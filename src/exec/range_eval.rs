@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int64Builder, ListBuilder, StringBuilder};
+use arrow::array::{Float64Builder, ListBuilder, StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
@@ -18,18 +18,18 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 ///
 /// For each step timestamp `t` and each series, this node collects all samples
 /// in `[t - range_ns, t]` and outputs:
-/// - `timestamp: Int64` — the evaluation timestamp
-/// - `timestamps: List<Int64>` — sample timestamps within the window
+/// - `timestamp: UInt64` — the evaluation timestamp
+/// - `timestamps: List<UInt64>` — sample timestamps within the window
 /// - `values: List<Float64>` — sample values within the window
 /// - label columns (Utf8)
 #[derive(Debug)]
 pub(crate) struct RangeVectorExec {
     child: Arc<dyn ExecutionPlan>,
-    range_ns: i64,
-    eval_ts_ns: Option<i64>,
-    start_ns: i64,
-    end_ns: i64,
-    step_ns: i64,
+    range_ns: u64,
+    eval_ts_ns: Option<u64>,
+    start_ns: u64,
+    end_ns: u64,
+    step_ns: u64,
     offset_ns: i64,
     label_columns: Vec<String>,
     output_schema: SchemaRef,
@@ -39,10 +39,10 @@ pub(crate) struct RangeVectorExec {
 /// Build the output Arrow schema for the windowing node.
 fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
     let mut fields = vec![
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new(
             "timestamps",
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
             false,
         ),
         Field::new(
@@ -61,11 +61,11 @@ impl RangeVectorExec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        range_ns: i64,
-        eval_ts_ns: Option<i64>,
-        start_ns: i64,
-        end_ns: i64,
-        step_ns: i64,
+        range_ns: u64,
+        eval_ts_ns: Option<u64>,
+        start_ns: u64,
+        end_ns: u64,
+        step_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
@@ -90,7 +90,7 @@ impl RangeVectorExec {
         }
     }
 
-    fn eval_timestamps(&self) -> Vec<i64> {
+    fn eval_timestamps(&self) -> Vec<u64> {
         if let Some(ts) = self.eval_ts_ns {
             return vec![ts];
         }
@@ -174,7 +174,7 @@ impl ExecutionPlan for RangeVectorExec {
             }
 
             // Build a map: series_key -> Vec<(timestamp, value)>
-            let mut series_map: HashMap<Vec<String>, Vec<(i64, f64)>> = HashMap::new();
+            let mut series_map: HashMap<Vec<String>, Vec<(u64, f64)>> = HashMap::new();
 
             for batch in &batches {
                 let ts_col = batch
@@ -184,8 +184,8 @@ impl ExecutionPlan for RangeVectorExec {
 
                 let ts_arr = ts_col
                     .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .expect("timestamp must be Int64");
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .expect("timestamp must be UInt64");
                 let val_arr = val_col
                     .as_any()
                     .downcast_ref::<arrow::array::Float64Array>()
@@ -221,8 +221,8 @@ impl ExecutionPlan for RangeVectorExec {
 
             // Build output arrays: for each eval timestamp and each series,
             // collect samples in [t - range_ns, t] into list arrays.
-            let mut out_ts = Int64Builder::new();
-            let mut out_timestamps = ListBuilder::new(Int64Builder::new());
+            let mut out_ts = UInt64Builder::new();
+            let mut out_timestamps = ListBuilder::new(UInt64Builder::new());
             let mut out_values = ListBuilder::new(Float64Builder::new());
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
@@ -230,8 +230,8 @@ impl ExecutionPlan for RangeVectorExec {
             for &eval_ts in &eval_timestamps {
                 // Apply offset: shift the lookup window into the past by offset_ns.
                 // The result is reported at eval_ts.
-                let effective_ts = eval_ts - offset_ns;
-                let window_start = effective_ts - range_ns;
+                let effective_ts = (eval_ts as i64 - offset_ns) as u64;
+                let window_start = effective_ts.saturating_sub(range_ns);
                 for (key, samples) in &series_map {
                     // Find samples within [window_start, effective_ts].
                     let start_idx = samples.partition_point(|(ts, _)| *ts < window_start);

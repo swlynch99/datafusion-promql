@@ -112,8 +112,8 @@ pub(crate) fn normalize_wide_to_long(
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
     for (idx, mc) in matched.iter().enumerate() {
         let mut exprs = vec![
-            // Timestamp: cast to Int64 (nanoseconds).
-            cast(col(mapping.timestamp_column.as_str()), DataType::Int64).alias("timestamp"),
+            // Timestamp: cast to UInt64 (nanoseconds).
+            cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp"),
             // Value: cast to Float64.
             // Use Column::new_unqualified to bypass the SQL parser, which would
             // strip anything after `/` from the column name.

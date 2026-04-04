@@ -12,7 +12,7 @@ use datafusion::logical_expr::{
 use promql_parser::parser::ast::Offset;
 use promql_parser::parser::{self, Expr, LabelModifier};
 
-use arrow::array::{Float64Array, Int64Array};
+use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::Field;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
@@ -48,10 +48,10 @@ fn offset_to_ns(offset: &Option<Offset>) -> i64 {
 pub struct EvalParams {
     /// For instant queries: the single evaluation timestamp (ns).
     /// `None` for range queries (timestamps generated from start/end/step).
-    pub eval_ts_ns: Option<i64>,
-    pub start_ns: i64,
-    pub end_ns: i64,
-    pub step_ns: i64,
+    pub eval_ts_ns: Option<u64>,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub step_ns: u64,
 }
 
 /// Extract label column names from a schema (everything except timestamp/value).
@@ -190,7 +190,7 @@ async fn plan_call(
             }
         };
 
-        let range_ns = matrix.range.as_nanos() as i64;
+        let range_ns = matrix.range.as_nanos() as u64;
         let offset_ns = offset_to_ns(&matrix.vs.offset);
 
         // Plan the inner vector selector with extra range expansion.
@@ -1175,7 +1175,7 @@ fn plan_synthetic_datetime(
     params: EvalParams,
 ) -> Result<LogicalPlan> {
     // Generate step timestamps.
-    let timestamps: Vec<i64> = if let Some(ts) = params.eval_ts_ns {
+    let timestamps: Vec<u64> = if let Some(ts) = params.eval_ts_ns {
         vec![ts]
     } else {
         let mut ts_vec = Vec::new();
@@ -1193,14 +1193,14 @@ fn plan_synthetic_datetime(
         .map(|&ts| dt_func.evaluate_ns(ts))
         .collect();
     let schema = Arc::new(arrow::datatypes::Schema::new(vec![
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
     ]));
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
         ],
     )

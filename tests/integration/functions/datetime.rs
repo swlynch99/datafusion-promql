@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -45,14 +45,14 @@ impl MetricSource for InMemoryMetricSource {
 /// Uses 2021-01-15 10:30:45 UTC (a Friday) as the sample timestamp.
 /// - host1: value = 100.0
 /// - host2: value = 200.0
-fn make_test_source() -> (InMemoryMetricSource, i64) {
+fn make_test_source() -> (InMemoryMetricSource, u64) {
     // 2021-01-15 10:30:45 UTC
     let dt = Utc.with_ymd_and_hms(2021, 1, 15, 10, 30, 45).unwrap();
-    let ts_ns = dt.timestamp_nanos_opt().unwrap();
+    let ts_ns = dt.timestamp_nanos_opt().unwrap() as u64;
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -61,7 +61,7 @@ fn make_test_source() -> (InMemoryMetricSource, i64) {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["test_metric", "test_metric"])),
-            Arc::new(Int64Array::from(vec![ts_ns, ts_ns])),
+            Arc::new(UInt64Array::from(vec![ts_ns, ts_ns])),
             Arc::new(Float64Array::from(vec![100.0, 200.0])),
             Arc::new(StringArray::from(vec!["host1", "host2"])),
         ],
@@ -83,7 +83,9 @@ fn make_test_source() -> (InMemoryMetricSource, i64) {
 async fn test_timestamp_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("timestamp(test_metric)", eval_time)
@@ -116,7 +118,9 @@ async fn test_timestamp_function() {
 async fn test_hour_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("hour(test_metric)", eval_time)
@@ -141,7 +145,9 @@ async fn test_hour_function() {
 async fn test_minute_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("minute(test_metric)", eval_time)
@@ -170,7 +176,9 @@ async fn test_minute_function() {
 async fn test_day_of_month_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("day_of_month(test_metric)", eval_time)
@@ -199,7 +207,9 @@ async fn test_day_of_month_function() {
 async fn test_day_of_week_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("day_of_week(test_metric)", eval_time)
@@ -228,7 +238,9 @@ async fn test_day_of_week_function() {
 async fn test_day_of_year_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("day_of_year(test_metric)", eval_time)
@@ -257,7 +269,9 @@ async fn test_day_of_year_function() {
 async fn test_days_in_month_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("days_in_month(test_metric)", eval_time)
@@ -286,7 +300,9 @@ async fn test_days_in_month_function() {
 async fn test_month_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("month(test_metric)", eval_time)
@@ -311,7 +327,9 @@ async fn test_month_function() {
 async fn test_year_function() {
     let (source, ts_ns) = make_test_source();
     let engine = PromqlEngine::new(Arc::new(source));
-    let eval_time = Utc.timestamp_millis_opt(ts_ns / 1_000_000).unwrap();
+    let eval_time = Utc
+        .timestamp_millis_opt((ts_ns / 1_000_000) as i64)
+        .unwrap();
 
     let result = engine
         .instant_query("year(test_metric)", eval_time)
@@ -454,7 +472,7 @@ async fn test_hour_range_query() {
     // Create source with data spanning multiple hours.
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -464,18 +482,18 @@ async fn test_hour_range_query() {
         .with_ymd_and_hms(2021, 1, 15, 10, 0, 0)
         .unwrap()
         .timestamp_nanos_opt()
-        .unwrap();
+        .unwrap() as u64;
     let ts2 = Utc
         .with_ymd_and_hms(2021, 1, 15, 11, 0, 0)
         .unwrap()
         .timestamp_nanos_opt()
-        .unwrap();
+        .unwrap() as u64;
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["test_metric", "test_metric"])),
-            Arc::new(Int64Array::from(vec![ts1, ts2])),
+            Arc::new(UInt64Array::from(vec![ts1, ts2])),
             Arc::new(Float64Array::from(vec![42.0, 42.0])),
             Arc::new(StringArray::from(vec!["host1", "host1"])),
         ],

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -50,7 +50,7 @@ impl MetricSource for InMemoryMetricSource {
 fn make_counter_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -66,7 +66,7 @@ fn make_counter_source() -> InMemoryMetricSource {
     // Series 1: instance=host1, rate = 10 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push((i as f64) * 10.0); // 0, 10, 20, 30, ...
         instances.push("host1");
         jobs.push("webserver");
@@ -75,7 +75,7 @@ fn make_counter_source() -> InMemoryMetricSource {
     // Series 2: instance=host2, rate = 20 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push((i as f64) * 20.0); // 0, 20, 40, 60, ...
         instances.push("host2");
         jobs.push("webserver");
@@ -85,7 +85,7 @@ fn make_counter_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(instances)),
             Arc::new(StringArray::from(jobs)),
@@ -101,7 +101,7 @@ fn make_counter_source() -> InMemoryMetricSource {
 fn make_gauge_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("sensor", DataType::Utf8, false),
     ]));
@@ -118,7 +118,7 @@ fn make_gauge_source() -> InMemoryMetricSource {
 
     for (i, &v) in gauge_values.iter().enumerate() {
         names.push("temperature");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         sensors.push("room1");
     }
@@ -127,7 +127,7 @@ fn make_gauge_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(sensors)),
         ],
@@ -500,7 +500,7 @@ async fn test_range_query_plain_selector() {
 async fn test_rate_with_counter_reset() {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -517,7 +517,7 @@ async fn test_rate_with_counter_reset() {
                 "resets_total",
                 "resets_total",
             ])),
-            Arc::new(Int64Array::from(vec![
+            Arc::new(UInt64Array::from(vec![
                 0,
                 1_000_000_000,
                 2_000_000_000,

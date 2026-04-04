@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow::array::{Array, AsArray, Float64Builder};
-use arrow::datatypes::{DataType, Int64Type};
+use arrow::datatypes::{DataType, UInt64Type};
 use datafusion::common::utils::take_function_args;
 use datafusion::common::{Result as DFResult, ScalarValue};
 use datafusion::logical_expr::Expr;
@@ -56,13 +56,13 @@ impl fmt::Display for DateTimeFunction {
 
 impl DateTimeFunction {
     /// Evaluate the function on a single nanosecond timestamp.
-    pub fn evaluate_ns(&self, ts_ns: i64) -> f64 {
+    pub fn evaluate_ns(&self, ts_ns: u64) -> f64 {
         use chrono::{Datelike, TimeZone, Timelike};
 
         match self {
             Self::Timestamp => ts_ns as f64 / 1_000_000_000.0,
             _ => {
-                let dt = chrono::Utc.timestamp_nanos(ts_ns);
+                let dt = chrono::Utc.timestamp_nanos(ts_ns as i64);
                 match self {
                     Self::Timestamp => unreachable!(),
                     Self::DayOfMonth => dt.day() as f64,
@@ -139,7 +139,7 @@ pub(crate) fn is_time_function(name: &str) -> bool {
 
 /// Create a ScalarUDF for a datetime function.
 ///
-/// The UDF takes an Int64 column (nanosecond timestamps) and returns Float64.
+/// The UDF takes a UInt64 column (nanosecond timestamps) and returns Float64.
 pub(crate) fn make_datetime_udf(func: DateTimeFunction) -> Arc<ScalarUDF> {
     Arc::new(ScalarUDF::new_from_impl(DateTimeUdf {
         func,
@@ -205,11 +205,11 @@ impl ScalarUDFImpl for DateTimeUdf {
         let func = self.func;
 
         match arg {
-            ColumnarValue::Scalar(ScalarValue::Int64(Some(ts_ns))) => Ok(ColumnarValue::Scalar(
+            ColumnarValue::Scalar(ScalarValue::UInt64(Some(ts_ns))) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Float64(Some(func.evaluate_ns(ts_ns))),
             )),
             ColumnarValue::Array(array) => {
-                let ts_array = array.as_primitive::<Int64Type>();
+                let ts_array = array.as_primitive::<UInt64Type>();
                 let mut builder = Float64Builder::with_capacity(ts_array.len());
                 for i in 0..ts_array.len() {
                     if ts_array.is_null(i) {
@@ -231,7 +231,7 @@ mod tests {
 
     // 2021-01-15 10:30:45 UTC in nanoseconds
     // Unix timestamp: 1610706645
-    const TEST_TS_NS: i64 = 1_610_706_645_000_000_000;
+    const TEST_TS_NS: u64 = 1_610_706_645_000_000_000;
 
     #[test]
     fn test_timestamp() {
@@ -276,7 +276,7 @@ mod tests {
         let ts = chrono::TimeZone::timestamp_opt(&chrono::Utc, 1581724800, 0)
             .unwrap()
             .timestamp_nanos_opt()
-            .unwrap();
+            .unwrap() as u64;
         let result = DateTimeFunction::DaysInMonth.evaluate_ns(ts);
         assert_eq!(result, 29.0);
     }
@@ -287,7 +287,7 @@ mod tests {
         let ts = chrono::TimeZone::timestamp_opt(&chrono::Utc, 1613347200, 0)
             .unwrap()
             .timestamp_nanos_opt()
-            .unwrap();
+            .unwrap() as u64;
         let result = DateTimeFunction::DaysInMonth.evaluate_ns(ts);
         assert_eq!(result, 28.0);
     }

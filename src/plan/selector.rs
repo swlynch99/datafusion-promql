@@ -15,12 +15,12 @@ use crate::types::TimeRange;
 /// data source. This helper inspects the schema and produces a literal of the
 /// matching type so that DataFusion filter comparisons don't fail with a type
 /// mismatch.
-fn timestamp_lit(schema: &arrow::datatypes::Schema, value: i64) -> datafusion::prelude::Expr {
+fn timestamp_lit(schema: &arrow::datatypes::Schema, value: u64) -> datafusion::prelude::Expr {
     let ts_type = schema
         .column_with_name("timestamp")
         .map(|(_, f)| f.data_type().clone());
     match ts_type {
-        Some(DataType::UInt64) => lit(value.max(0) as u64),
+        Some(DataType::Int64) => lit(value as i64),
         _ => lit(value),
     }
 }
@@ -80,7 +80,7 @@ pub(crate) async fn plan_vector_selector(
     vs: &VectorSelector,
     source: &dyn MetricSource,
     time_range: TimeRange,
-    extra_range_ns: i64,
+    extra_range_ns: u64,
     offset_ns: i64,
 ) -> Result<(LogicalPlan, Vec<String>)> {
     let metric_name = vs
@@ -114,8 +114,8 @@ pub(crate) async fn plan_vector_selector(
     // A positive offset means we look further into the past, so we expand
     // start_ns. A negative offset means we look toward the future, so we
     // expand end_ns.
-    let offset_expand_start = offset_ns.max(0);
-    let offset_expand_end = (-offset_ns).max(0);
+    let offset_expand_start = offset_ns.max(0) as u64;
+    let offset_expand_end = (-offset_ns).max(0) as u64;
     let expanded_range = TimeRange {
         start_ns: time_range.start_ns.map(|s| {
             s.saturating_sub(crate::types::DEFAULT_LOOKBACK_NS)
@@ -136,7 +136,7 @@ pub(crate) async fn plan_vector_selector(
     match format {
         TableFormat::Wide(mapping) => {
             // Normalize wide format to long format via UNION ALL projections.
-            // After normalization, `timestamp` is always Int64 nanoseconds.
+            // After normalization, `timestamp` is always UInt64 nanoseconds.
             let (plan, label_columns) = crate::normalize::normalize_wide_to_long(
                 provider,
                 &mapping,

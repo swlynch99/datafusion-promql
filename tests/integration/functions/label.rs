@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -43,7 +43,7 @@ impl MetricSource for InMemoryMetricSource {
 fn make_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -53,7 +53,7 @@ fn make_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["metric", "metric"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000, 1_000_000_000])),
+            Arc::new(UInt64Array::from(vec![1_000_000_000, 1_000_000_000])),
             Arc::new(Float64Array::from(vec![1.0, 2.0])),
             Arc::new(StringArray::from(vec![
                 "host1.example.com:9090",

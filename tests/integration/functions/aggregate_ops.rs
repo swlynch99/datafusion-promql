@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, StringArray};
+use arrow::array::{Float64Array, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -68,7 +68,7 @@ impl MetricSource for MultiMetricSource {
 fn make_gauge_source() -> MultiMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
     ]));
@@ -84,19 +84,19 @@ fn make_gauge_source() -> MultiMetricSource {
 
     for (i, &v) in host1_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host1");
     }
     for (i, &v) in host2_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host2");
     }
     for (i, &v) in host3_vals.iter().enumerate() {
         names.push("cpu_usage");
-        timestamps.push((i as i64) * 1_000_000_000);
+        timestamps.push((i as u64) * 1_000_000_000);
         values.push(v);
         instances.push("host3");
     }
@@ -105,7 +105,7 @@ fn make_gauge_source() -> MultiMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(names)),
-            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(UInt64Array::from(timestamps)),
             Arc::new(Float64Array::from(values)),
             Arc::new(StringArray::from(instances)),
         ],
@@ -125,7 +125,7 @@ fn make_gauge_source() -> MultiMetricSource {
 fn make_two_label_source() -> MultiMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, false),
         Field::new("instance", DataType::Utf8, false),
         Field::new("job", DataType::Utf8, false),
@@ -140,8 +140,8 @@ fn make_two_label_source() -> MultiMetricSource {
                 "request_duration",
                 "request_duration",
             ])),
-            Arc::new(Int64Array::from(vec![
-                2_000_000_000_i64,
+            Arc::new(UInt64Array::from(vec![
+                2_000_000_000_u64,
                 2_000_000_000,
                 2_000_000_000,
                 2_000_000_000,

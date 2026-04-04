@@ -22,12 +22,12 @@ pub(crate) struct RangeVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
     /// The range window duration in nanoseconds (e.g. 5m = 300_000_000_000).
-    pub range_ns: i64,
+    pub range_ns: u64,
     /// For an instant query, the single evaluation timestamp (ns).
-    pub eval_ts_ns: Option<i64>,
-    pub start_ns: i64,
-    pub end_ns: i64,
-    pub step_ns: i64,
+    pub eval_ts_ns: Option<u64>,
+    pub start_ns: u64,
+    pub end_ns: u64,
+    pub step_ns: u64,
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
     pub offset_ns: i64,
     /// Label column names used for grouping series.
@@ -48,10 +48,10 @@ pub(crate) fn compute_range_vector_schema(
     label_columns: &[String],
 ) -> Result<DFSchemaRef> {
     let mut fields = vec![
-        Field::new("timestamp", DataType::Int64, false),
+        Field::new("timestamp", DataType::UInt64, false),
         Field::new(
             "timestamps",
-            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
             false,
         ),
         Field::new(
@@ -80,8 +80,8 @@ impl RangeVectorEval {
     /// Create a node for an instant query at a single timestamp.
     pub fn instant(
         input: LogicalPlan,
-        timestamp_ns: i64,
-        range_ns: i64,
+        timestamp_ns: u64,
+        range_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Result<Self> {
@@ -102,10 +102,10 @@ impl RangeVectorEval {
     /// Create a node for a range query over `[start, end]` with step.
     pub fn range(
         input: LogicalPlan,
-        start_ns: i64,
-        end_ns: i64,
-        step_ns: i64,
-        range_ns: i64,
+        start_ns: u64,
+        end_ns: u64,
+        step_ns: u64,
+        range_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Result<Self> {

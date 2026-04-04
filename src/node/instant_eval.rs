@@ -19,9 +19,9 @@ pub(crate) struct InstantVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
     /// The single evaluation timestamp (ns).
-    pub timestamp_ns: i64,
+    pub timestamp_ns: u64,
     /// Lookback window in nanoseconds.
-    pub lookback_ns: i64,
+    pub lookback_ns: u64,
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
     pub offset_ns: i64,
     /// Label column names used for grouping series (excludes timestamp/value).
@@ -31,8 +31,8 @@ pub(crate) struct InstantVectorEval {
 impl InstantVectorEval {
     pub fn new(
         input: LogicalPlan,
-        timestamp_ns: i64,
-        lookback_ns: i64,
+        timestamp_ns: u64,
+        lookback_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
