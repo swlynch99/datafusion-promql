@@ -122,7 +122,9 @@ pub(crate) async fn plan_vector_selector(
                 .saturating_sub(extra_range_ns)
                 .saturating_sub(offset_expand_start)
         }),
-        end_ns: time_range.end_ns.map(|e| e.saturating_add(offset_expand_end)),
+        end_ns: time_range
+            .end_ns
+            .map(|e| e.saturating_add(offset_expand_end)),
     };
 
     let (provider, format) = source

@@ -181,10 +181,7 @@ async fn test_rate_without_offset_baseline() {
     let engine = PromqlEngine::new(Arc::new(source));
 
     let ts = chrono::Utc.timestamp_millis_opt(5_000_000).unwrap();
-    let result = engine
-        .instant_query("rate(cpu[2000s])", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("rate(cpu[2000s])", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {
@@ -209,10 +206,7 @@ async fn test_offset_beyond_data_returns_empty() {
     let engine = PromqlEngine::new(Arc::new(source));
 
     let ts = chrono::Utc.timestamp_millis_opt(5_000_000).unwrap();
-    let result = engine
-        .instant_query("cpu offset 10000s", ts)
-        .await
-        .unwrap();
+    let result = engine.instant_query("cpu offset 10000s", ts).await.unwrap();
 
     match result {
         QueryResult::Vector(samples) => {

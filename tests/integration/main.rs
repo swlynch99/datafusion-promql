@@ -6,8 +6,8 @@ mod optimizations;
 mod range_query;
 mod round_function;
 
+mod inspect_offset;
 #[cfg(feature = "parquet")]
 mod parquet_query;
 #[cfg(feature = "parquet")]
 mod rezolus_query;
-mod inspect_offset;
