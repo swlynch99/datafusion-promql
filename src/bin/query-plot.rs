@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use clap::Parser;
 
 use datafusion_promql::PromqlEngine;
 use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::QueryResult;
 
-use plotters::prelude::*;
+use textplots::{Chart, ColorPlot, Shape};
 
 #[derive(Parser)]
-#[command(about = "Execute a PromQL query against a parquet file and plot the results")]
+#[command(about = "Execute a PromQL query against a parquet file and plot results in the terminal")]
 struct Cli {
     /// Path to the parquet file
     #[arg(short, long)]
@@ -35,16 +35,12 @@ struct Cli {
     #[arg(short, long)]
     timestamp: Option<i64>,
 
-    /// Output file path (PNG)
-    #[arg(short, long, default_value = "plot.png")]
-    output: String,
-
-    /// Image width in pixels
-    #[arg(long, default_value = "1024")]
+    /// Chart width in terminal columns
+    #[arg(long, default_value = "120")]
     width: u32,
 
-    /// Image height in pixels
-    #[arg(long, default_value = "768")]
+    /// Chart height in terminal rows
+    #[arg(long, default_value = "30")]
     height: u32,
 }
 
@@ -69,18 +65,18 @@ fn format_labels(labels: &std::collections::BTreeMap<String, String>) -> String 
 }
 
 /// Pick a color for series index `i` from a fixed palette.
-fn series_color(i: usize) -> RGBColor {
-    const PALETTE: &[RGBColor] = &[
-        RGBColor(31, 119, 180),
-        RGBColor(255, 127, 14),
-        RGBColor(44, 160, 44),
-        RGBColor(214, 39, 40),
-        RGBColor(148, 103, 189),
-        RGBColor(140, 86, 75),
-        RGBColor(227, 119, 194),
-        RGBColor(127, 127, 127),
-        RGBColor(188, 189, 34),
-        RGBColor(23, 190, 207),
+fn series_color(i: usize) -> rgb::RGB8 {
+    const PALETTE: &[rgb::RGB8] = &[
+        rgb::RGB8::new(31, 119, 180),  // blue
+        rgb::RGB8::new(255, 127, 14),  // orange
+        rgb::RGB8::new(44, 160, 44),   // green
+        rgb::RGB8::new(214, 39, 40),   // red
+        rgb::RGB8::new(148, 103, 189), // purple
+        rgb::RGB8::new(140, 86, 75),   // brown
+        rgb::RGB8::new(227, 119, 194), // pink
+        rgb::RGB8::new(127, 127, 127), // gray
+        rgb::RGB8::new(188, 189, 34),  // olive
+        rgb::RGB8::new(23, 190, 207),  // cyan
     ];
     PALETTE[i % PALETTE.len()]
 }
@@ -88,7 +84,6 @@ fn series_color(i: usize) -> RGBColor {
 fn plot_matrix(
     result: &QueryResult,
     query: &str,
-    output: &str,
     width: u32,
     height: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -101,87 +96,84 @@ fn plot_matrix(
         return Err("query returned no data".into());
     }
 
-    // Compute global min/max for axes.
+    // Compute global min/max timestamps to use as x-axis bounds.
     let mut ts_min = i64::MAX;
     let mut ts_max = i64::MIN;
-    let mut val_min = f64::INFINITY;
-    let mut val_max = f64::NEG_INFINITY;
 
     for s in series {
-        for &(ts, val) in &s.samples {
+        for &(ts, _) in &s.samples {
             ts_min = ts_min.min(ts);
             ts_max = ts_max.max(ts);
-            if val.is_finite() {
-                val_min = val_min.min(val);
-                val_max = val_max.max(val);
-            }
         }
     }
 
-    // Add a little vertical padding.
-    let val_range = val_max - val_min;
-    let padding = if val_range == 0.0 {
-        1.0
-    } else {
-        val_range * 0.05
-    };
-    val_min -= padding;
-    val_max += padding;
+    // Convert to seconds offset from ts_min for f32 plotting.
+    let ts_to_x = |ts: i64| -> f32 { ((ts - ts_min) as f64 / 1e9) as f32 };
+    let x_max = ts_to_x(ts_max);
 
+    println!("{query}");
+    println!();
+
+    // Build point data for all series.
+    let all_points: Vec<Vec<(f32, f32)>> = series
+        .iter()
+        .map(|s| {
+            s.samples
+                .iter()
+                .filter(|(_, v)| v.is_finite())
+                .map(|&(ts, val)| (ts_to_x(ts), val as f32))
+                .collect()
+        })
+        .collect();
+
+    // Build shapes upfront so borrows live long enough.
+    let shapes: Vec<Shape> = all_points.iter().map(|p| Shape::Lines(p)).collect();
+    let colors: Vec<rgb::RGB8> = (0..shapes.len()).map(series_color).collect();
+
+    let mut chart = Chart::new(width, height, 0.0, x_max);
+    let chart_ref = &mut chart;
+    // Chain all linecolorplot calls so borrow checker sees one contiguous borrow.
+    let mut c = &mut *chart_ref;
+    for (shape, &color) in shapes.iter().zip(colors.iter()) {
+        c = c.linecolorplot(shape, color);
+    }
+    c.nice();
+
+    // Print time range.
     let dt_min = DateTime::from_timestamp_nanos(ts_min);
     let dt_max = DateTime::from_timestamp_nanos(ts_max);
+    println!(
+        "  x: {:.1}s  [{} .. {}]",
+        x_max,
+        dt_min.format("%H:%M:%S"),
+        dt_max.format("%H:%M:%S")
+    );
 
-    let root = BitMapBackend::new(output, (width, height)).into_drawing_area();
-    root.fill(&WHITE)?;
-
-    let mut chart = ChartBuilder::on(&root)
-        .caption(query, ("sans-serif", 20).into_font())
-        .margin(10)
-        .x_label_area_size(50)
-        .y_label_area_size(70)
-        .build_cartesian_2d(dt_min..dt_max, val_min..val_max)?;
-
-    chart
-        .configure_mesh()
-        .x_label_formatter(&|dt| dt.format("%H:%M:%S").to_string())
-        .x_desc("Time (UTC)")
-        .y_desc("Value")
-        .draw()?;
-
-    for (i, s) in series.iter().enumerate() {
-        let color = series_color(i);
-        let label = format_labels(&s.labels);
-        let points: Vec<(DateTime<Utc>, f64)> = s
-            .samples
-            .iter()
-            .map(|&(ts, val)| (DateTime::from_timestamp_nanos(ts), val))
-            .collect();
-
-        chart
-            .draw_series(LineSeries::new(points.clone(), color.stroke_width(2)))?
-            .label(&label)
-            .legend(move |(x, y)| {
-                PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2))
-            });
-    }
-
+    // Print legend.
     if series.len() > 1 {
-        chart
-            .configure_series_labels()
-            .position(SeriesLabelPosition::UpperRight)
-            .background_style(WHITE.mix(0.8))
-            .border_style(BLACK)
-            .draw()?;
+        println!();
+        for (i, s) in series.iter().enumerate() {
+            let color = series_color(i);
+            // Use ANSI true color to show the color swatch.
+            let label = format_labels(&s.labels);
+            println!(
+                "  \x1b[38;2;{};{};{}m●\x1b[0m {}",
+                color.r, color.g, color.b, label
+            );
+        }
+    } else {
+        let label = format_labels(&series[0].labels);
+        if label != "{}" {
+            println!("  {label}");
+        }
     }
 
-    root.present()?;
     Ok(())
 }
 
 fn plot_vector(
     result: &QueryResult,
     query: &str,
-    output: &str,
     width: u32,
     height: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -194,41 +186,30 @@ fn plot_vector(
         return Err("query returned no data".into());
     }
 
-    let labels: Vec<String> = samples.iter().map(|s| format_labels(&s.labels)).collect();
-    let values: Vec<f64> = samples.iter().map(|s| s.value).collect();
+    println!("{query}");
+    println!();
 
-    let val_max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    let val_min = values.iter().cloned().fold(f64::INFINITY, f64::min);
-    let range = val_max - val_min;
-    let padding = if range == 0.0 { 1.0 } else { range * 0.1 };
-    let y_min = (val_min - padding).min(0.0);
-    let y_max = val_max + padding;
+    // For instant vectors, plot as points along x = index.
+    let points: Vec<(f32, f32)> = samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i as f32, s.value as f32))
+        .collect();
 
-    let n = samples.len();
+    let x_max = (samples.len() as f32).max(1.0);
 
-    let root = BitMapBackend::new(output, (width, height)).into_drawing_area();
-    root.fill(&WHITE)?;
+    let shape = Shape::Points(&points);
+    let color = series_color(0);
+    Chart::new(width, height, -0.5, x_max - 0.5)
+        .linecolorplot(&shape, color)
+        .nice();
 
-    let mut chart = ChartBuilder::on(&root)
-        .caption(query, ("sans-serif", 20).into_font())
-        .margin(10)
-        .x_label_area_size(80)
-        .y_label_area_size(70)
-        .build_cartesian_2d(0..n, y_min..y_max)?;
+    // Print labels below.
+    for (i, s) in samples.iter().enumerate() {
+        let label = format_labels(&s.labels);
+        println!("  [{i}] {label} = {}", s.value);
+    }
 
-    chart
-        .configure_mesh()
-        .x_label_formatter(&|idx| labels.get(*idx).cloned().unwrap_or_default())
-        .x_labels(n.min(20))
-        .y_desc("Value")
-        .draw()?;
-
-    chart.draw_series(values.iter().enumerate().map(|(i, &v)| {
-        let color = series_color(i);
-        Rectangle::new([(i, 0.0f64.max(y_min)), (i + 1, v)], color.filled())
-    }))?;
-
-    root.present()?;
     Ok(())
 }
 
@@ -239,24 +220,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
-    let result = if let Some(ts_ns) = cli.timestamp {
+    if let Some(ts_ns) = cli.timestamp {
         // Instant query.
         let ts = DateTime::from_timestamp_nanos(ts_ns);
-        println!("Executing instant query at {ts}...");
-        let r = engine.instant_query(&cli.query, ts).await?;
-        println!("Plotting instant vector...");
-        plot_vector(&r, &cli.query, &cli.output, cli.width, cli.height)?;
-        r
+        eprintln!("Executing instant query at {ts}...");
+        let result = engine.instant_query(&cli.query, ts).await?;
+        plot_vector(&result, &cli.query, cli.width, cli.height)?;
     } else if let (Some(start_ns), Some(end_ns)) = (cli.start, cli.end) {
         // Range query.
         let start = DateTime::from_timestamp_nanos(start_ns);
         let end = DateTime::from_timestamp_nanos(end_ns);
         let step = std::time::Duration::from_secs(cli.step);
-        println!("Executing range query [{start} .. {end}] step {step:?}...");
-        let r = engine.range_query(&cli.query, start, end, step).await?;
-        println!("Plotting range matrix...");
-        plot_matrix(&r, &cli.query, &cli.output, cli.width, cli.height)?;
-        r
+        eprintln!("Executing range query [{start} .. {end}] step {step:?}...");
+        let result = engine.range_query(&cli.query, start, end, step).await?;
+        plot_matrix(&result, &cli.query, cli.width, cli.height)?;
     } else {
         return Err(
             "provide either --timestamp for instant queries, or --start and --end for range queries"
@@ -264,37 +241,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     };
 
-    // Print a summary.
-    match &result {
-        QueryResult::Vector(samples) => {
-            println!("Result: {} sample(s)", samples.len());
-            for s in samples {
-                println!(
-                    "  {} @ {} = {}",
-                    format_labels(&s.labels),
-                    s.timestamp_ns,
-                    s.value
-                );
-            }
-        }
-        QueryResult::Matrix(series) => {
-            println!("Result: {} series", series.len());
-            for s in series {
-                println!(
-                    "  {} ({} samples)",
-                    format_labels(&s.labels),
-                    s.samples.len()
-                );
-            }
-        }
-        QueryResult::Scalar(val, ts) => {
-            println!("Scalar: {val} @ {ts}");
-        }
-        QueryResult::String(val, ts) => {
-            println!("String: {val} @ {ts}");
-        }
-    }
-
-    println!("Plot written to {}", cli.output);
     Ok(())
 }
