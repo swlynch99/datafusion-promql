@@ -53,6 +53,7 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(crate::opt::logical::DateTimeFuncToProjection))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RangeVectorToAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LiftConstantProjections))
+            .with_optimizer_rule(Arc::new(crate::opt::logical::RemoveNoopProjections))
             .build();
         let ctx = SessionContext::new_with_state(state);
         Self { ctx, source }
