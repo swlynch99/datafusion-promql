@@ -34,6 +34,14 @@ cargo run --bin query-graph -- 'sum(rate(metric[5m])) by (instance)'
 
 # Show DataFusion logical/optimized plans (requires parquet feature)
 cargo run --bin query-plan --features parquet -- 'rate(cpu_usage[5m])'
+
+# Execute a query and plot results as PNG (requires plot feature)
+# Range query:
+cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 0 --end 60000 --step 15 'rate(metric[30s])'
+# Instant query:
+cargo run --bin query-plot --features plot -- -f data/metrics.parquet --timestamp 60000 'metric'
+# Custom output file and dimensions:
+cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 0 --end 60000 -o chart.png --width 1280 --height 960 'rate(metric[30s])'
 ```
 
 ## Architecture
