@@ -4,7 +4,7 @@ pub mod types;
 
 pub mod exec;
 mod func;
-mod node;
+pub mod node;
 mod normalize;
 pub mod opt;
 pub mod plan;

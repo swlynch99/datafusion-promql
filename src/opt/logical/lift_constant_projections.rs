@@ -3,10 +3,14 @@ use std::sync::Arc;
 use datafusion::common::Column;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::error::Result;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Projection, Union};
+use datafusion::logical_expr::{
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Union,
+};
 use datafusion::optimizer::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion::prelude::lit;
+
+use crate::node::InstantVectorEval;
 
 /// Optimizer rule that lifts shared constant literal projections out of unions
 /// and past sort nodes, and flattens nested projections.
@@ -39,6 +43,18 @@ use datafusion::prelude::lit;
 ///     child
 /// ```
 ///
+/// **Pattern 4 – InstantVectorEval over a projection with constants:**
+///
+/// ```text
+/// InstantVectorEval(label_columns)       Projection [constants + col refs]
+///   Projection [cols + consts]       →     InstantVectorEval(label_columns')
+///     child                                  Projection [cols only]
+///                                              child
+/// ```
+///
+/// Constant columns (excluding `timestamp` and `value`) are lifted above the
+/// `InstantVectorEval` and removed from its `label_columns`.
+///
 /// Together, a tree like `Sort -> Union -> [Sort -> Proj, Sort -> Proj]` is
 /// simplified in multiple bottom-up passes without any special "wrapper"
 /// logic.
@@ -63,6 +79,15 @@ impl OptimizerRule for LiftConstantProjections {
             LogicalPlan::Union(_) => rewrite_union(plan),
             LogicalPlan::Sort(_) => rewrite_sort(plan),
             LogicalPlan::Projection(_) => rewrite_nested_projection(plan),
+            LogicalPlan::Extension(ext)
+                if ext
+                    .node
+                    .as_any()
+                    .downcast_ref::<InstantVectorEval>()
+                    .is_some() =>
+            {
+                rewrite_instant_vector_eval(plan)
+            }
             _ => Ok(Transformed::no(plan)),
         }
     }
@@ -204,6 +229,105 @@ fn rewrite_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
     });
 
     let result = build_outer_projection(new_sort, &constant_cols)?;
+    Ok(Transformed::yes(result))
+}
+
+/// Pattern 4: Lift constant columns from a Projection child of an
+/// InstantVectorEval node. Non-timestamp, non-value constant columns are
+/// removed from the inner projection and from `label_columns`, then added
+/// back via an outer projection above the InstantVectorEval.
+fn rewrite_instant_vector_eval(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Extension(ref ext) = plan else {
+        unreachable!();
+    };
+
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<InstantVectorEval>()
+        .unwrap();
+
+    let LogicalPlan::Projection(ref proj) = eval.input else {
+        return Ok(Transformed::no(plan));
+    };
+
+    // Identify constant literals in the projection, but skip timestamp/value.
+    let constant_cols: Vec<Option<(datafusion::common::ScalarValue, String)>> = proj
+        .expr
+        .iter()
+        .map(|e| {
+            let lit = extract_literal(e)?;
+            if lit.1 == "timestamp" || lit.1 == "value" {
+                None
+            } else {
+                Some(lit)
+            }
+        })
+        .collect();
+
+    if constant_cols.iter().all(|c| c.is_none()) {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Need at least one non-constant column.
+    let non_constant_count = constant_cols.iter().filter(|c| c.is_none()).count();
+    if non_constant_count == 0 {
+        return Ok(Transformed::no(plan));
+    }
+
+    // Collect names of constant columns to remove from label_columns.
+    let constant_names: std::collections::HashSet<&str> = constant_cols
+        .iter()
+        .filter_map(|c| c.as_ref().map(|(_, name)| name.as_str()))
+        .collect();
+
+    // Rebuild: Projection(constants + refs) -> InstantVectorEval(updated) -> Projection(non-constants) -> child
+    let LogicalPlan::Extension(ext) = plan else {
+        unreachable!();
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<InstantVectorEval>()
+        .unwrap()
+        .clone();
+    let LogicalPlan::Projection(proj) = eval.input else {
+        unreachable!();
+    };
+
+    // Build inner projection without constants.
+    let new_exprs: Vec<Expr> = proj
+        .expr
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| constant_cols[*i].is_none())
+        .map(|(_, e)| e)
+        .collect();
+
+    let inner_proj = LogicalPlanBuilder::from(Arc::unwrap_or_clone(proj.input))
+        .project(new_exprs)?
+        .build()?;
+
+    // Build new InstantVectorEval with updated label_columns.
+    let new_label_columns: Vec<String> = eval
+        .label_columns
+        .iter()
+        .filter(|name| !constant_names.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    let new_eval = InstantVectorEval::new(
+        inner_proj,
+        eval.timestamp_ns,
+        eval.lookback_ns,
+        eval.offset_ns,
+        new_label_columns,
+    );
+    let eval_plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(new_eval),
+    });
+
+    let result = build_outer_projection(eval_plan, &constant_cols)?;
     Ok(Transformed::yes(result))
 }
 

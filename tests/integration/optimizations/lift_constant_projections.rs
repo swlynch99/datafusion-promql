@@ -5,10 +5,11 @@ use datafusion::common::alias::AliasGenerator;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::datasource::MemTable;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Union};
+use datafusion::logical_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, Union};
 use datafusion::optimizer::OptimizerRule;
 use datafusion::prelude::*;
 
+use datafusion_promql::node::InstantVectorEval;
 use datafusion_promql::opt::logical::LiftConstantProjections;
 
 /// Build a trivial single-row MemTable scan to use as the base of test projections.
@@ -884,6 +885,253 @@ fn test_flatten_after_lift_union() {
             "union branch should have flattened nested projection"
         );
     }
+}
+
+// ─── InstantVectorEval pattern tests ────────────────────────────────────────
+
+/// Helper: wrap a plan in an InstantVectorEval node.
+fn wrap_in_instant_vector_eval(input: LogicalPlan, label_columns: Vec<String>) -> LogicalPlan {
+    let eval = InstantVectorEval::new(
+        input,
+        1_000_000_000,   // timestamp_ns
+        300_000_000_000, // lookback_ns (5 min)
+        0,               // offset_ns
+        label_columns,
+    );
+    LogicalPlan::Extension(Extension {
+        node: Arc::new(eval),
+    })
+}
+
+/// When an InstantVectorEval wraps a Projection with constant columns,
+/// those constants should be lifted above the eval node.
+#[test]
+fn test_instant_vector_eval_lifts_constants() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            col("ts").alias("host"), // non-constant label
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_instant_vector_eval(proj, vec!["__name__".to_string(), "host".to_string()]);
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(
+        transformed,
+        "rule should lift constants past InstantVectorEval"
+    );
+
+    // Top-level should be a Projection with the constant.
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(outer.expr.len(), 4);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // Under the projection should be an InstantVectorEval.
+    let LogicalPlan::Extension(ref ext) = *outer.input else {
+        panic!("expected Extension under projection");
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<InstantVectorEval>()
+        .expect("expected InstantVectorEval");
+
+    // __name__ should be removed from label_columns.
+    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+
+    // Inner projection should have 3 columns (timestamp, value, host).
+    let LogicalPlan::Projection(ref inner_proj) = eval.input else {
+        panic!("expected Projection inside InstantVectorEval");
+    };
+    assert_eq!(inner_proj.expr.len(), 3);
+}
+
+/// Timestamp and value constants should NOT be lifted.
+#[test]
+fn test_instant_vector_eval_preserves_timestamp_and_value() {
+    let scan = make_scan("t0");
+    // Unlikely scenario but tests the guard: timestamp and value are literals.
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            lit(1000u64).alias("timestamp"),
+            lit(42.0).alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_instant_vector_eval(proj, vec!["__name__".to_string()]);
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "__name__ should still be lifted");
+
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+
+    // __name__ (index 2) should be lifted.
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // timestamp and value should NOT be lifted — they should be column refs.
+    assert!(
+        !is_any_literal(&outer.expr[0]),
+        "timestamp should not be lifted"
+    );
+    assert!(
+        !is_any_literal(&outer.expr[1]),
+        "value should not be lifted"
+    );
+}
+
+/// When the child of InstantVectorEval is not a Projection, the rule should
+/// not fire.
+#[test]
+fn test_instant_vector_eval_non_projection_child_unchanged() {
+    let scan = make_scan("t0");
+    let plan = wrap_in_instant_vector_eval(scan, vec![]);
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(!transformed, "rule should not fire on non-projection child");
+}
+
+/// When there are no constant columns in the child projection, the rule
+/// should not fire.
+#[test]
+fn test_instant_vector_eval_no_constants_unchanged() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_instant_vector_eval(proj, vec![]);
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(!transformed, "no constants to lift");
+}
+
+/// Multiple constants should all be lifted.
+#[test]
+fn test_instant_vector_eval_multiple_constants_lifted() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("prod").alias("env"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_instant_vector_eval(proj, vec!["__name__".to_string(), "env".to_string()]);
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top");
+    };
+    assert_eq!(outer.expr.len(), 4);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+    assert!(is_literal_alias(&outer.expr[3], "prod", "env"));
+
+    let LogicalPlan::Extension(ref ext) = *outer.input else {
+        panic!("expected Extension under projection");
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<InstantVectorEval>()
+        .expect("expected InstantVectorEval");
+
+    // Both constants removed from label_columns.
+    assert!(eval.label_columns.is_empty());
+}
+
+/// Output schema should be preserved when lifting through InstantVectorEval.
+#[test]
+fn test_instant_vector_eval_schema_preserved() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            col("ts").alias("host"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_instant_vector_eval(proj, vec!["__name__".to_string(), "host".to_string()]);
+
+    let original_field_names: Vec<String> = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let result_field_names: Vec<String> = result
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    assert_eq!(original_field_names, result_field_names);
+}
+
+/// Composed: InstantVectorEval over Union with shared constants should lift
+/// all the way up in multiple passes.
+#[test]
+fn test_composed_instant_vector_eval_over_union() {
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host1").alias("host"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host2").alias("host"),
+        ],
+    ]);
+
+    let plan = wrap_in_instant_vector_eval(union, vec!["__name__".to_string(), "host".to_string()]);
+
+    let (result, transformed) = apply_rule_to_fixpoint(plan);
+    assert!(transformed);
+
+    // After fixpoint: Projection(__name__=cpu) -> InstantVectorEval -> ... -> Union
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // host should not be lifted (differs between branches).
+    assert!(!is_any_literal(&outer.expr[3]));
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
