@@ -264,7 +264,6 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
