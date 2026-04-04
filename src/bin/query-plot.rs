@@ -35,13 +35,21 @@ struct Cli {
     #[arg(short, long)]
     timestamp: Option<i64>,
 
-    /// Chart width in terminal columns
-    #[arg(long, default_value = "120")]
-    width: u32,
+    /// Chart width in terminal columns (defaults to terminal width)
+    #[arg(long)]
+    width: Option<u32>,
 
-    /// Chart height in terminal rows
-    #[arg(long, default_value = "30")]
-    height: u32,
+    /// Chart height in terminal rows (defaults to terminal height minus 10)
+    #[arg(long)]
+    height: Option<u32>,
+}
+
+fn terminal_dimensions() -> (u32, u32) {
+    let (w, h) = terminal_size::terminal_size()
+        .map(|(w, h)| (w.0 as u32, h.0 as u32))
+        .unwrap_or((120, 40));
+    // Reserve some rows for the legend/labels printed below the chart.
+    (w, h.saturating_sub(10).max(10))
 }
 
 /// Format a label set into a compact series name like `{instance="host1", job="node"}`.
@@ -217,6 +225,10 @@ fn plot_vector(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    let (term_w, term_h) = terminal_dimensions();
+    let width = cli.width.unwrap_or(term_w);
+    let height = cli.height.unwrap_or(term_h);
+
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let engine = PromqlEngine::new(source);
 
@@ -225,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ts = DateTime::from_timestamp_nanos(ts_ns);
         eprintln!("Executing instant query at {ts}...");
         let result = engine.instant_query(&cli.query, ts).await?;
-        plot_vector(&result, &cli.query, cli.width, cli.height)?;
+        plot_vector(&result, &cli.query, width, height)?;
     } else if let (Some(start_ns), Some(end_ns)) = (cli.start, cli.end) {
         // Range query.
         let start = DateTime::from_timestamp_nanos(start_ns);
@@ -233,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let step = std::time::Duration::from_secs(cli.step);
         eprintln!("Executing range query [{start} .. {end}] step {step:?}...");
         let result = engine.range_query(&cli.query, start, end, step).await?;
-        plot_matrix(&result, &cli.query, cli.width, cli.height)?;
+        plot_matrix(&result, &cli.query, width, height)?;
     } else {
         return Err(
             "provide either --timestamp for instant queries, or --start and --end for range queries"
