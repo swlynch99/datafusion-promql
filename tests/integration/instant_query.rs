@@ -546,3 +546,42 @@ async fn test_ceil_with_label_filter() {
         other => panic!("expected Vector result, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn test_clamp_max_instant_query() {
+    let source = make_test_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // At t=3000: host1=30.0, host2=70.0
+    // clamp_max(..., 50) should cap at 50
+    let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let result = engine
+        .instant_query("clamp_max(cpu_usage, 50)", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(mut samples) => {
+            assert_eq!(samples.len(), 2, "expected 2 series");
+
+            samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
+
+            // host1: clamp_max(30.0, 50) = 30.0 (unchanged, below max)
+            assert_eq!(samples[0].labels.get("instance").unwrap(), "host1");
+            assert!(
+                (samples[0].value - 30.0).abs() < f64::EPSILON,
+                "expected clamp_max(30.0, 50) = 30.0, got {}",
+                samples[0].value
+            );
+
+            // host2: clamp_max(70.0, 50) = 50.0 (clamped to max)
+            assert_eq!(samples[1].labels.get("instance").unwrap(), "host2");
+            assert!(
+                (samples[1].value - 50.0).abs() < f64::EPSILON,
+                "expected clamp_max(70.0, 50) = 50.0, got {}",
+                samples[1].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
