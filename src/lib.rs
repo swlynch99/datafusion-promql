@@ -67,8 +67,8 @@ impl PromqlPlanner {
             .timestamp_nanos_opt()
             .expect("timestamp out of range for nanoseconds");
         let time_range = TimeRange {
-            start_ns: ts_ns,
-            end_ns: ts_ns,
+            start_ns: Some(ts_ns),
+            end_ns: Some(ts_ns),
         };
         let params = EvalParams {
             eval_ts_ns: Some(ts_ns),
@@ -95,7 +95,10 @@ impl PromqlPlanner {
             .timestamp_nanos_opt()
             .expect("end timestamp out of range for nanoseconds");
         let step_ns = step.as_nanos() as i64;
-        let time_range = TimeRange { start_ns, end_ns };
+        let time_range = TimeRange {
+            start_ns: Some(start_ns),
+            end_ns: Some(end_ns),
+        };
         let params = EvalParams {
             eval_ts_ns: None,
             start_ns,

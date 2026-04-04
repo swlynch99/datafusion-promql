@@ -58,13 +58,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         // Whole-range query: no timestamp, use plan_expr directly.
         let expr =
             promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
-        let time_range = TimeRange {
-            start_ns: i64::MIN,
-            end_ns: i64::MAX,
-        };
+        // No timestamp constraints for whole-range queries.
+        let time_range = TimeRange::unbounded();
         let params = datafusion_promql::plan::EvalParams {
             eval_ts_ns: None,
-            start_ns: i64::MIN,
+            start_ns: 0,
             end_ns: i64::MAX,
             step_ns: 1,
         };
