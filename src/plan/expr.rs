@@ -4,6 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, cast, col};
+use promql_parser::parser::ast::Offset;
 use promql_parser::parser::{self, Expr, LabelModifier};
 
 use arrow::array::{Float64Array, Int64Array};
@@ -24,6 +25,16 @@ use crate::node::{
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
 use super::selector::plan_vector_selector;
+
+/// Convert a promql-parser `Offset` to a signed nanoseconds value.
+/// Positive = shift lookup window into the past, negative = into the future.
+fn offset_to_ns(offset: &Option<Offset>) -> i64 {
+    match offset {
+        Some(Offset::Pos(dur)) => dur.as_nanos() as i64,
+        Some(Offset::Neg(dur)) => -(dur.as_nanos() as i64),
+        None => 0,
+    }
+}
 
 /// Parameters controlling how evaluation timestamps are generated.
 #[derive(Debug, Clone, Copy)]
@@ -55,11 +66,18 @@ pub async fn plan_expr(
 ) -> Result<LogicalPlan> {
     match expr {
         Expr::VectorSelector(vs) => {
+            let offset_ns = offset_to_ns(&vs.offset);
             let (child_plan, label_columns) =
-                plan_vector_selector(vs, source, time_range, 0).await?;
+                plan_vector_selector(vs, source, time_range, 0, offset_ns).await?;
 
             let node = if let Some(ts) = params.eval_ts_ns {
-                InstantVectorEval::instant(child_plan, ts, DEFAULT_LOOKBACK_NS, label_columns)
+                InstantVectorEval::instant(
+                    child_plan,
+                    ts,
+                    DEFAULT_LOOKBACK_NS,
+                    offset_ns,
+                    label_columns,
+                )
             } else {
                 InstantVectorEval::range(
                     child_plan,
@@ -67,6 +85,7 @@ pub async fn plan_expr(
                     params.end_ns,
                     params.step_ns,
                     DEFAULT_LOOKBACK_NS,
+                    offset_ns,
                     label_columns,
                 )
             };
@@ -162,14 +181,15 @@ async fn plan_call(
         };
 
         let range_ns = matrix.range.as_nanos() as i64;
+        let offset_ns = offset_to_ns(&matrix.vs.offset);
 
         // Plan the inner vector selector with extra range expansion.
         let (child_plan, label_columns) =
-            plan_vector_selector(&matrix.vs, source, time_range, range_ns).await?;
+            plan_vector_selector(&matrix.vs, source, time_range, range_ns, offset_ns).await?;
 
         // Wrap in RangeVectorEval (windowing) then RangeFunctionEval (function).
         let window_node = if let Some(ts) = params.eval_ts_ns {
-            RangeVectorEval::instant(child_plan, ts, range_ns, label_columns)?
+            RangeVectorEval::instant(child_plan, ts, range_ns, offset_ns, label_columns)?
         } else {
             RangeVectorEval::range(
                 child_plan,
@@ -177,6 +197,7 @@ async fn plan_call(
                 params.end_ns,
                 params.step_ns,
                 range_ns,
+                offset_ns,
                 label_columns,
             )?
         };

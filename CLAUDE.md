@@ -94,7 +94,7 @@ The Rezolus parquet test data (`data/metrics.parquet`) has ~950 columns in wide 
 See `.claude/plans/functions.md` for the full list. Notable gaps:
 - Range functions: `avg_over_time`, `deriv`, `predict_linear`, `*_over_time` variants
 - Aggregators: `topk`, `bottomk`, `quantile`, `stddev`, `stdvar`
-- Modifiers: `offset`, `@` (fixed timestamp), `bool` on comparisons
+- Modifiers: `@` (fixed timestamp), `bool` on comparisons
 - Subqueries
 
 ## Testing approach
