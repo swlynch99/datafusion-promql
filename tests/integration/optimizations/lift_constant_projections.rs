@@ -393,6 +393,302 @@ fn test_output_schema_preserved() {
     );
 }
 
+// ─── Sort lifting tests ─────────────────────────────────────────────────────
+
+/// Helper: wrap a plan in a Sort node sorting by the given column.
+fn wrap_in_sort(plan: LogicalPlan, sort_col: &str) -> LogicalPlan {
+    LogicalPlanBuilder::from(plan)
+        .sort(vec![col(sort_col).sort(true, false)])
+        .unwrap()
+        .build()
+        .unwrap()
+}
+
+/// When a Sort wraps a Union and the sort does not reference the constant
+/// columns, the constant projection should be lifted above the sort.
+#[test]
+fn test_lift_through_sort() {
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ],
+    ]);
+    let plan = wrap_in_sort(union, "value");
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "rule should lift constants past sort");
+
+    // Top-level should be Projection.
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(outer.expr.len(), 3);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // Under the projection should be a Sort.
+    let LogicalPlan::Sort(sort) = outer.input.as_ref() else {
+        panic!("expected Sort under projection, got:\n{}", outer.input);
+    };
+
+    // Under the sort should be a Union.
+    let LogicalPlan::Union(inner_union) = sort.input.as_ref() else {
+        panic!("expected Union under sort");
+    };
+
+    // Inner branches should have 2 columns (timestamp, value).
+    for input in &inner_union.inputs {
+        let LogicalPlan::Projection(p) = input.as_ref() else {
+            panic!("expected Projection in branch");
+        };
+        assert_eq!(p.expr.len(), 2);
+    }
+}
+
+/// When the sort references a constant column, the rule should NOT lift.
+#[test]
+fn test_sort_referencing_constant_blocks_lift() {
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ],
+    ]);
+    // Sort by the constant column __name__.
+    let plan = wrap_in_sort(union, "__name__");
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(
+        !transformed,
+        "rule should not lift when sort references a constant column"
+    );
+}
+
+/// Sort over a Union where no constants are shared should be unchanged.
+#[test]
+fn test_sort_no_shared_constants_unchanged() {
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("host1").alias("host"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("host2").alias("host"),
+        ],
+    ]);
+    let plan = wrap_in_sort(union, "value");
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(!transformed, "no shared constants to lift");
+}
+
+/// Output schema should be preserved when lifting through sort.
+#[test]
+fn test_sort_output_schema_preserved() {
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host1").alias("host"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host2").alias("host"),
+        ],
+    ]);
+    let plan = wrap_in_sort(union, "value");
+
+    let original_field_names: Vec<String> = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let result_field_names: Vec<String> = result
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    assert_eq!(original_field_names, result_field_names);
+}
+
+/// Build a union where each branch has a Sort wrapping the Projection.
+/// This tests lifting through wrappers inside union branches.
+fn make_sorted_union(branches: Vec<Vec<Expr>>, sort_col: &str) -> LogicalPlan {
+    let inputs: Vec<Arc<LogicalPlan>> = branches
+        .into_iter()
+        .enumerate()
+        .map(|(idx, exprs)| {
+            let scan = make_scan(&format!("t{idx}"));
+            let proj = LogicalPlanBuilder::from(scan)
+                .project(exprs)
+                .unwrap()
+                .build()
+                .unwrap();
+            let sorted = LogicalPlanBuilder::from(proj)
+                .sort(vec![col(sort_col).sort(true, false)])
+                .unwrap()
+                .build()
+                .unwrap();
+            Arc::new(sorted)
+        })
+        .collect();
+
+    LogicalPlan::Union(Union::try_new_with_loose_types(inputs).unwrap())
+}
+
+/// Lifting through wrappers inside union branches:
+/// Union -> [Sort -> Proj, Sort -> Proj] should lift constants.
+#[test]
+fn test_lift_through_branch_wrappers() {
+    let plan = make_sorted_union(
+        vec![
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+        ],
+        "value",
+    );
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "should lift constants through branch sorts");
+
+    // Top-level: Projection
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(outer.expr.len(), 3);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // Under projection: Union
+    let LogicalPlan::Union(inner_union) = outer.input.as_ref() else {
+        panic!("expected Union under projection");
+    };
+
+    // Each branch should be Sort -> Projection(2 cols)
+    for input in &inner_union.inputs {
+        let LogicalPlan::Sort(_) = input.as_ref() else {
+            panic!("expected Sort in branch, got:\n{input}");
+        };
+        let sort_input = input.inputs()[0];
+        let LogicalPlan::Projection(p) = sort_input else {
+            panic!("expected Projection under Sort in branch");
+        };
+        assert_eq!(p.expr.len(), 2);
+    }
+}
+
+/// Combined: Sort -> Union -> [Sort -> Proj, Sort -> Proj]
+/// Constants should be lifted all the way out.
+#[test]
+fn test_lift_through_outer_and_branch_wrappers() {
+    let union = make_sorted_union(
+        vec![
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+        ],
+        "timestamp",
+    );
+    let plan = wrap_in_sort(union, "value");
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(
+        transformed,
+        "should lift constants through both outer and branch wrappers"
+    );
+
+    // Structure: Projection -> Sort -> Union -> [Sort -> Proj, Sort -> Proj]
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top");
+    };
+    assert_eq!(outer.expr.len(), 3);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    let LogicalPlan::Sort(_) = outer.input.as_ref() else {
+        panic!("expected Sort under projection");
+    };
+
+    let LogicalPlan::Union(inner_union) = outer.input.inputs()[0] else {
+        panic!("expected Union under outer Sort");
+    };
+
+    for input in &inner_union.inputs {
+        let LogicalPlan::Sort(_) = input.as_ref() else {
+            panic!("expected Sort in branch");
+        };
+        let LogicalPlan::Projection(p) = input.inputs()[0] else {
+            panic!("expected Projection under branch Sort");
+        };
+        assert_eq!(p.expr.len(), 2);
+    }
+}
+
+/// Branch wrapper referencing a constant should block lifting.
+#[test]
+fn test_branch_wrapper_referencing_constant_blocks_lift() {
+    // Sort by the constant column inside each branch.
+    let plan = make_sorted_union(
+        vec![
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+            vec![
+                col("ts").alias("timestamp"),
+                col("val").alias("value"),
+                lit("cpu").alias("__name__"),
+            ],
+        ],
+        "__name__",
+    );
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(
+        !transformed,
+        "should not lift when branch wrapper references constant"
+    );
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Check if an expression is `lit(expected_value).alias(expected_name)`.
