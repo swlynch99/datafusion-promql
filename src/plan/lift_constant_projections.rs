@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use datafusion::common::tree_node::Transformed;
 use datafusion::common::Column;
+use datafusion::common::tree_node::Transformed;
 use datafusion::error::Result;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Projection, Union};
 use datafusion::optimizer::optimizer::ApplyOrder;

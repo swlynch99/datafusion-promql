@@ -17,8 +17,7 @@ fn make_scan(alias: &str) -> LogicalPlan {
         Field::new("ts", DataType::Int64, false),
         Field::new("val", DataType::Float64, false),
     ]));
-    let table =
-        MemTable::try_new(schema, vec![vec![]]).expect("failed to create MemTable");
+    let table = MemTable::try_new(schema, vec![vec![]]).expect("failed to create MemTable");
     LogicalPlanBuilder::scan(
         alias,
         datafusion::datasource::provider_as_source(Arc::new(table)),
@@ -205,7 +204,10 @@ fn test_no_shared_constants_unchanged() {
     ]);
 
     let (_result, transformed) = apply_rule(plan);
-    assert!(!transformed, "rule should not fire when no constants are shared");
+    assert!(
+        !transformed,
+        "rule should not fire when no constants are shared"
+    );
 }
 
 /// When all columns are constant (no non-constant columns), bail out to avoid
@@ -235,7 +237,10 @@ fn test_non_projection_branches_unchanged() {
     );
 
     let (_result, transformed) = apply_rule(plan);
-    assert!(!transformed, "rule should not fire on non-projection branches");
+    assert!(
+        !transformed,
+        "rule should not fire on non-projection branches"
+    );
 }
 
 /// Non-Union plans should pass through unchanged.
