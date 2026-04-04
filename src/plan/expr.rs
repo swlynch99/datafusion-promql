@@ -9,6 +9,7 @@ use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
     AggregateFunction, lookup_aggregate_function, lookup_instant_function, lookup_range_function,
+    lookup_sort_function,
 };
 use crate::node::{
     BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
@@ -183,6 +184,66 @@ async fn plan_call(
         return Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(func_node),
         }));
+    }
+
+    // Check if this is a sort function.
+    if let Some(sort_kind) = lookup_sort_function(func_name) {
+        if call.args.args.is_empty() {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() requires at least 1 argument"
+            )));
+        }
+
+        // Extract string label arguments (for sort_by_label / sort_by_label_desc).
+        let label_args: Vec<String> = call
+            .args
+            .args
+            .iter()
+            .skip(1)
+            .filter_map(|arg| {
+                if let Expr::StringLiteral(lit) = arg.as_ref() {
+                    Some(lit.val.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if sort_kind.requires_labels() && label_args.is_empty() {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() requires at least one label argument"
+            )));
+        }
+
+        let sort_func = sort_kind.resolve(label_args.clone());
+        let vector_arg = &call.args.args[0];
+        let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+
+        // Build sort expressions based on the sort function variant.
+        let sort_exprs = match &sort_func {
+            crate::func::sort::SortFunction::Sort => {
+                vec![col("value").sort(true, false)]
+            }
+            crate::func::sort::SortFunction::SortDesc => {
+                vec![col("value").sort(false, false)]
+            }
+            crate::func::sort::SortFunction::SortByLabel { labels } => labels
+                .iter()
+                .map(|l| col(l.as_str()).sort(true, false))
+                .collect(),
+            crate::func::sort::SortFunction::SortByLabelDesc { labels } => labels
+                .iter()
+                .map(|l| col(l.as_str()).sort(false, false))
+                .collect(),
+        };
+
+        let sorted_plan = LogicalPlanBuilder::from(child_plan)
+            .sort(sort_exprs)
+            .map_err(|e| PromqlError::Plan(format!("sort plan error: {e}")))?
+            .build()
+            .map_err(|e| PromqlError::Plan(format!("sort build error: {e}")))?;
+
+        return Ok(sorted_plan);
     }
 
     Err(PromqlError::NotImplemented(format!(

@@ -5,6 +5,7 @@ mod instant_query;
 mod optimizations;
 mod range_query;
 mod round_function;
+mod sort_function;
 
 #[cfg(feature = "parquet")]
 mod parquet_query;
