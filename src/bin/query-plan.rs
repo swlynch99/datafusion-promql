@@ -106,15 +106,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         println!();
     }
 
+    let optimized_plan = planner.optimize_logical_plan(logical_plan.clone())?;
+
     if show_optimized {
-        let optimized_plan = planner.optimize_logical_plan(logical_plan.clone())?;
         println!("=== Optimized Logical Plan ===");
         println!("{}", optimized_plan.display_indent_schema());
         println!();
     }
 
     if show_physical {
-        let physical_plan = planner.create_physical_plan(&logical_plan).await?;
+        let physical_plan = planner.create_physical_plan(&optimized_plan).await?;
         println!("=== Physical Plan ===");
         println!(
             "{}",
