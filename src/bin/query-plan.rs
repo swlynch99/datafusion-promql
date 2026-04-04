@@ -4,7 +4,7 @@ use chrono::DateTime;
 use clap::Parser;
 
 use datafusion_promql::PromqlPlanner;
-use datafusion_promql::parquet::ParquetMetricSource;
+use datafusion_promql::parquet::{ParquetMetricSource, read_timestamp_range};
 use datafusion_promql::types::TimeRange;
 
 #[derive(Parser)]
@@ -60,27 +60,26 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             (cli.logical, cli.optimized, cli.physical)
         };
 
+    // Auto-detect timestamp range from parquet metadata when not provided.
+    let (auto_min_ns, auto_max_ns) = read_timestamp_range(&cli.file)?;
+
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
 
     const NS_PER_SEC: i64 = 1_000_000_000;
 
+    let has_range_args = cli.start.is_some() || cli.end.is_some() || cli.step.is_some();
+
     let logical_plan = if let Some(ts) = cli.timestamp {
         let ts_ns = ts * NS_PER_SEC;
         let timestamp = DateTime::from_timestamp_nanos(ts_ns);
         planner.instant_logical_plan(&cli.query, timestamp).await?
-    } else {
+    } else if has_range_args {
         let expr =
             promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
 
-        let start_ns = cli
-            .start
-            .ok_or("--start is required for range queries (or use --timestamp for instant)")?
-            * NS_PER_SEC;
-        let end_ns = cli
-            .end
-            .ok_or("--end is required for range queries (or use --timestamp for instant)")?
-            * NS_PER_SEC;
+        let start_ns = cli.start.map(|s| s * NS_PER_SEC).unwrap_or(auto_min_ns);
+        let end_ns = cli.end.map(|e| e * NS_PER_SEC).unwrap_or(auto_max_ns);
         let step_ns = cli.step.unwrap_or(1) as i64 * NS_PER_SEC;
 
         let time_range = TimeRange {
@@ -94,6 +93,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             step_ns,
         };
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
+    } else {
+        // No timestamp flags: default to instant query at the max timestamp.
+        let timestamp = DateTime::from_timestamp_nanos(auto_max_ns);
+        eprintln!("No timestamp specified; using max from parquet metadata: {timestamp}");
+        planner.instant_logical_plan(&cli.query, timestamp).await?
     };
 
     if show_logical {

@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -6,6 +7,8 @@ use arrow::datatypes::{DataType, Field};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
+use parquet::file::reader::FileReader;
+use parquet::file::serialized_reader::SerializedFileReader;
 
 use crate::datasource::{ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSource, TableFormat};
 use crate::error::{PromqlError, Result};
@@ -242,6 +245,59 @@ fn build_metric_metadata(
             extra_columns: vec![],
         })
         .collect()
+}
+
+/// Read the min and max `timestamp` values from parquet row-group statistics.
+///
+/// Returns `(min_ns, max_ns)` as nanosecond timestamps. This reads only the
+/// file footer metadata — no row data is decoded.
+pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(i64, i64)> {
+    let file = File::open(path.as_ref()).map_err(|e| {
+        PromqlError::DataSource(format!("failed to open parquet file: {e}"))
+    })?;
+    let reader = SerializedFileReader::new(file).map_err(|e| {
+        PromqlError::DataSource(format!("failed to read parquet metadata: {e}"))
+    })?;
+    let metadata = reader.metadata();
+    let file_meta = metadata.file_metadata();
+    let schema = file_meta.schema_descr();
+
+    // Find the timestamp column index.
+    let ts_idx = (0..schema.num_columns())
+        .find(|&i| schema.column(i).name() == "timestamp")
+        .ok_or_else(|| {
+            PromqlError::DataSource("no 'timestamp' column found in parquet schema".into())
+        })?;
+
+    let mut global_min: Option<i64> = None;
+    let mut global_max: Option<i64> = None;
+
+    for rg_idx in 0..metadata.num_row_groups() {
+        let rg = metadata.row_group(rg_idx);
+        let col = rg.column(ts_idx);
+        if let Some(stats) = col.statistics() {
+            let (Some(min_bytes), Some(max_bytes)) =
+                (stats.min_bytes_opt(), stats.max_bytes_opt())
+            else {
+                continue;
+            };
+            // The timestamp column is UInt64 in the arrow schema but stored as
+            // INT64 in parquet (signed). Read as bytes and reinterpret.
+            if min_bytes.len() == 8 && max_bytes.len() == 8 {
+                let min_val = i64::from_le_bytes(min_bytes.try_into().unwrap());
+                let max_val = i64::from_le_bytes(max_bytes.try_into().unwrap());
+                global_min = Some(global_min.map_or(min_val, |v: i64| v.min(min_val)));
+                global_max = Some(global_max.map_or(max_val, |v: i64| v.max(max_val)));
+            }
+        }
+    }
+
+    match (global_min, global_max) {
+        (Some(min), Some(max)) => Ok((min, max)),
+        _ => Err(PromqlError::DataSource(
+            "no timestamp statistics found in parquet metadata".into(),
+        )),
+    }
 }
 
 /// Check whether a metric name matches a single [`Matcher`].
