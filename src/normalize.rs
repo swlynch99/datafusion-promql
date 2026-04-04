@@ -109,11 +109,22 @@ pub(crate) fn normalize_wide_to_long(
     // Build one SELECT branch per matched column.
     // Each branch gets a unique scan alias so the DataFusion optimizer does not
     // collapse the identical table scans into a single one via CSE.
+    // Check if the timestamp column already has the target type.
+    let schema = provider.schema();
+    let ts_field = schema
+        .field_with_name(mapping.timestamp_column.as_str())
+        .map_err(|e| PromqlError::Plan(format!("timestamp column not found: {e}")))?;
+    let ts_expr = if ts_field.data_type() == &DataType::UInt64 {
+        col(mapping.timestamp_column.as_str()).alias("timestamp")
+    } else {
+        cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp")
+    };
+
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
     for (idx, mc) in matched.iter().enumerate() {
         let mut exprs = vec![
-            // Timestamp: cast to UInt64 (nanoseconds).
-            cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp"),
+            // Timestamp: cast to UInt64 (nanoseconds) if needed.
+            ts_expr.clone(),
             // Value: cast to Float64.
             // Use Column::new_unqualified to bypass the SQL parser, which would
             // strip anything after `/` from the column name.
