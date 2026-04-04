@@ -33,6 +33,10 @@ pub(crate) enum InstantFunction {
     Round {
         to_nearest: f64,
     },
+    /// Clamp each sample value to have a minimum of the given scalar.
+    ClampMin {
+        min: f64,
+    },
     /// Returns the sign of each sample: -1 if negative, 0 if zero, 1 if positive.
     Sgn,
     /// Square root of each sample value. Returns NaN for negative inputs.
@@ -50,6 +54,7 @@ impl fmt::Display for InstantFunction {
             Self::Log2 => write!(f, "log2"),
             Self::Log10 => write!(f, "log10"),
             Self::Round { to_nearest } => write!(f, "round(to_nearest={to_nearest})"),
+            Self::ClampMin { min } => write!(f, "clamp_min(min={min})"),
             Self::Sgn => write!(f, "sgn"),
             Self::Sqrt => write!(f, "sqrt"),
         }
@@ -69,6 +74,7 @@ impl InstantFunction {
             Self::Log2 => value.log2(),
             Self::Log10 => value.log10(),
             Self::Round { to_nearest } => promql_round(value, *to_nearest),
+            Self::ClampMin { min } => promql_clamp_min(value, *min),
             Self::Sgn => {
                 if value.is_nan() {
                     f64::NAN
@@ -108,6 +114,7 @@ impl PartialEq for InstantFunction {
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
+            (Self::ClampMin { min: a }, Self::ClampMin { min: b }) => a.to_bits() == b.to_bits(),
             (Self::Sgn, Self::Sgn) => true,
             (Self::Sqrt, Self::Sqrt) => true,
             _ => false,
@@ -130,6 +137,7 @@ impl Hash for InstantFunction {
             | Self::Sgn
             | Self::Sqrt => {}
             Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
+            Self::ClampMin { min } => min.to_bits().hash(state),
         }
     }
 }
@@ -150,6 +158,10 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
         "round" => {
             let to_nearest = extra_args.first().copied().unwrap_or(1.0);
             Some(InstantFunction::Round { to_nearest })
+        }
+        "clamp_min" => {
+            let min = extra_args.first().copied().unwrap_or(0.0);
+            Some(InstantFunction::ClampMin { min })
         }
         "sgn" => Some(InstantFunction::Sgn),
         "sqrt" => Some(InstantFunction::Sqrt),
@@ -184,6 +196,10 @@ pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr 
         InstantFunction::Sgn => expr_fn::signum(input),
         InstantFunction::Round { to_nearest } => {
             let udf = make_promql_round_udf(*to_nearest);
+            udf.call(vec![input])
+        }
+        InstantFunction::ClampMin { min } => {
+            let udf = make_promql_clamp_min_udf(*min);
             udf.call(vec![input])
         }
     };
@@ -252,6 +268,86 @@ impl ScalarUDFImpl for PromqlRoundUdf {
                 let result = array
                     .as_primitive::<Float64Type>()
                     .unary::<_, Float64Type>(|x| promql_round(x, to_nearest));
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => Ok(arg),
+        }
+    }
+}
+
+/// PromQL `clamp_min(v, min)` semantics: returns NaN if either argument is NaN.
+fn promql_clamp_min(value: f64, min: f64) -> f64 {
+    if value.is_nan() || min.is_nan() {
+        f64::NAN
+    } else if value < min {
+        min
+    } else {
+        value
+    }
+}
+
+/// Create a ScalarUDF implementing PromQL's `clamp_min(v, min)` semantics.
+fn make_promql_clamp_min_udf(min: f64) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(PromqlClampMinUdf::new(min)))
+}
+
+#[derive(Debug)]
+struct PromqlClampMinUdf {
+    min: f64,
+    signature: Signature,
+}
+
+impl PromqlClampMinUdf {
+    fn new(min: f64) -> Self {
+        Self {
+            min,
+            signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq for PromqlClampMinUdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.min.to_bits() == other.min.to_bits()
+    }
+}
+impl Eq for PromqlClampMinUdf {}
+
+impl std::hash::Hash for PromqlClampMinUdf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.min.to_bits().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for PromqlClampMinUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "promql_clamp_min"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        let min = self.min;
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(
+                ColumnarValue::Scalar(ScalarValue::Float64(Some(promql_clamp_min(v, min)))),
+            ),
+            ColumnarValue::Array(array) => {
+                let result = array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| promql_clamp_min(x, min));
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             _ => Ok(arg),
@@ -687,5 +783,80 @@ mod tests {
             lookup_instant_function("sqrt", &[]),
             Some(InstantFunction::Sqrt)
         ));
+    }
+
+    // --- clamp_min tests ---
+
+    #[test]
+    fn test_clamp_min_below() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(3.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_min_above() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(10.0), 10.0);
+    }
+
+    #[test]
+    fn test_clamp_min_equal() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_min_negative() {
+        let f = InstantFunction::ClampMin { min: -2.0 };
+        assert_eq!(f.evaluate(-5.0), -2.0);
+        assert_eq!(f.evaluate(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_clamp_min_nan() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        // NaN compared with max returns NaN per IEEE 754 / f64::max behavior
+        assert!(f.evaluate(f64::NAN).is_nan());
+    }
+
+    #[test]
+    fn test_clamp_min_infinity() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(f64::INFINITY), f64::INFINITY);
+        assert_eq!(f.evaluate(f64::NEG_INFINITY), 5.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp_min() {
+        let f = lookup_instant_function("clamp_min", &[3.0]).unwrap();
+        match f {
+            InstantFunction::ClampMin { min } => {
+                assert!((min - 3.0).abs() < f64::EPSILON)
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_lookup_clamp_min_no_args() {
+        let f = lookup_instant_function("clamp_min", &[]).unwrap();
+        match f {
+            InstantFunction::ClampMin { min } => {
+                assert!((min - 0.0).abs() < f64::EPSILON)
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_clamp_min_display() {
+        let f = InstantFunction::ClampMin { min: 3.0 };
+        assert_eq!(f.to_string(), "clamp_min(min=3)");
+    }
+
+    #[test]
+    fn test_clamp_min_drops_metric_name() {
+        let f = InstantFunction::ClampMin { min: 0.0 };
+        assert!(f.drops_metric_name());
     }
 }
