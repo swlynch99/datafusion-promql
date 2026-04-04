@@ -56,7 +56,11 @@ fn make_source_with_negatives() -> InMemorySource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000, 1_000_000_000, 1_000_000_000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000,
+                1_000_000_000,
+                1_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![-5.0, 3.0, 0.0])),
             Arc::new(StringArray::from(vec!["a", "b", "c"])),
         ],
@@ -165,7 +169,11 @@ async fn test_abs_range_query() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["gauge", "gauge", "gauge"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000, 2_000_000_000, 3_000_000_000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![-10.0, -20.0, -30.0])),
             Arc::new(StringArray::from(vec!["x", "x", "x"])),
         ],

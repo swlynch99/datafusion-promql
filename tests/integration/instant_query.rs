@@ -60,7 +60,11 @@ fn make_sgn_test_source() -> InMemoryMetricSource {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["metric", "metric", "metric"])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000, 1_000_000_000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000_i64,
+                1_000_000_000,
+                1_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![42.0, -7.5, 0.0])),
             Arc::new(StringArray::from(vec!["positive", "negative", "zero"])),
         ],
@@ -96,9 +100,15 @@ fn make_test_source() -> InMemoryMetricSource {
             ])),
             Arc::new(Int64Array::from(vec![
                 // Series 1: instance=host1 at t=1000, 2000, 3000, 4000
-                1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
                 // Series 2: instance=host2 at t=1000, 2000, 3000, 4000
-                1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
             ])),
             Arc::new(Float64Array::from(vec![
                 // Series 1 values
@@ -308,7 +318,11 @@ async fn test_floor_instant_query() {
                 "cpu_usage",
                 "cpu_usage",
             ])),
-            Arc::new(Int64Array::from(vec![1_000_000_000_i64, 1_000_000_000, 1_000_000_000])),
+            Arc::new(Int64Array::from(vec![
+                1_000_000_000_i64,
+                1_000_000_000,
+                1_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![3.7, -1.2, 5.0])),
             Arc::new(StringArray::from(vec!["host1", "host2", "host3"])),
             Arc::new(StringArray::from(vec!["n", "n", "n"])),

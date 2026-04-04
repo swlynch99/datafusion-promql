@@ -174,7 +174,12 @@ mod tests {
     #[test]
     fn test_irate_with_counter_reset() {
         // Last two: (2s, 20) and (3s, 5) -> reset, increase = 5, dt = 1s
-        let samples = vec![(0, 0.0), (1_000_000_000, 10.0), (2_000_000_000, 20.0), (3_000_000_000, 5.0)];
+        let samples = vec![
+            (0, 0.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 5.0),
+        ];
         let result = RangeFunction::Irate.evaluate(&samples).unwrap();
         assert!(
             (result - 5.0).abs() < f64::EPSILON,
@@ -184,7 +189,12 @@ mod tests {
 
     #[test]
     fn test_increase_basic() {
-        let samples = vec![(0, 100.0), (1_000_000_000, 110.0), (2_000_000_000, 120.0), (3_000_000_000, 130.0)];
+        let samples = vec![
+            (0, 100.0),
+            (1_000_000_000, 110.0),
+            (2_000_000_000, 120.0),
+            (3_000_000_000, 130.0),
+        ];
         let result = RangeFunction::Increase.evaluate(&samples).unwrap();
         assert!(
             (result - 30.0).abs() < f64::EPSILON,
@@ -211,7 +221,12 @@ mod tests {
 
     #[test]
     fn test_delta_basic() {
-        let samples = vec![(0, 10.0), (1_000_000_000, 15.0), (2_000_000_000, 12.0), (3_000_000_000, 18.0)];
+        let samples = vec![
+            (0, 10.0),
+            (1_000_000_000, 15.0),
+            (2_000_000_000, 12.0),
+            (3_000_000_000, 18.0),
+        ];
         let result = RangeFunction::Delta.evaluate(&samples).unwrap();
         assert!(
             (result - 8.0).abs() < f64::EPSILON,

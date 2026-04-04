@@ -448,7 +448,13 @@ async fn test_rate_with_counter_reset() {
                 "resets_total",
                 "resets_total",
             ])),
-            Arc::new(Int64Array::from(vec![0, 1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000])),
+            Arc::new(Int64Array::from(vec![
+                0,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![0.0, 10.0, 20.0, 5.0, 15.0])),
             Arc::new(StringArray::from(vec![
                 "host1", "host1", "host1", "host1", "host1",
