@@ -50,6 +50,7 @@ impl PromqlPlanner {
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_optimizer_rule(Arc::new(crate::opt::logical::InstantFuncToProjection))
+            .with_optimizer_rule(Arc::new(crate::opt::logical::DateTimeFuncToProjection))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RangeVectorToAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LiftConstantProjections))
             .build();
