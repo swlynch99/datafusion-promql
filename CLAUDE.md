@@ -37,9 +37,9 @@ cargo run --bin query-plan --features parquet -- 'rate(cpu_usage[5m])'
 
 # Execute a query and plot results in the terminal (requires plot feature)
 # Range query:
-cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 1750106216002000000 --end 1750106506001000000 --step 60 'rate(cpu_usage[60s])'
+cargo run --bin query-plot --features plot -- -f data/metrics.parquet --start 1750106216 --end 1750106506 --step 60 'rate(cpu_usage[60s])'
 # Instant query:
-cargo run --bin query-plot --features plot -- -f data/metrics.parquet --timestamp 1750106360000000000 'cpu_cores'
+cargo run --bin query-plot --features plot -- -f data/metrics.parquet --timestamp 1750106360 'cpu_cores'
 ```
 
 ## Architecture
