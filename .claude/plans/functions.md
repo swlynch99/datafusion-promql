@@ -157,7 +157,7 @@ These are expression modifiers rather than functions, but are tracked here since
 
 | Modifier | Description |
 |----------|-------------|
-| `offset` | Shift the time range of a selector backwards by a fixed duration: `metric_name offset 5m`. |
+| ~~`offset`~~ | ~~Shift the time range of a selector backwards by a fixed duration: `metric_name offset 5m`.~~ **(implemented)** |
 | `@` | Evaluate a selector at a fixed timestamp: `metric_name @ 1609459200`. |
 | `bool` | On comparison binary operators, return 0/1 instead of filtering: `metric > bool 10`. |
 | Subqueries | Evaluate an instant vector expression over a range: `rate(metric[5m])[30m:1m]`. |

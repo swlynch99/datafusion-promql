@@ -44,6 +44,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.end_ns,
                 eval.step_ns,
                 eval.lookback_ns,
+                eval.offset_ns,
                 eval.label_columns.clone(),
             );
             return Ok(Some(Arc::new(exec)));
@@ -58,6 +59,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.start_ns,
                 eval.end_ns,
                 eval.step_ns,
+                eval.offset_ns,
                 eval.label_columns.clone(),
             );
             return Ok(Some(Arc::new(exec)));

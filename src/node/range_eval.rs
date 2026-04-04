@@ -14,8 +14,9 @@ use crate::error::{PromqlError, Result};
 /// them into per-window arrays at each evaluation timestamp.
 ///
 /// For each step timestamp `t` and each series, this node collects all samples
-/// in `[t - range_ns, t]` and outputs them as `List<Int64>` (timestamps) and
-/// `List<Float64>` (values) arrays.
+/// in `[t - offset - range_ns, t - offset]` and outputs them as `List<Int64>`
+/// (timestamps) and `List<Float64>` (values) arrays. The result is reported at
+/// timestamp `t`.
 #[derive(Debug, Clone)]
 pub(crate) struct RangeVectorEval {
     /// The child plan that produces raw samples in long format.
@@ -27,6 +28,8 @@ pub(crate) struct RangeVectorEval {
     pub start_ns: i64,
     pub end_ns: i64,
     pub step_ns: i64,
+    /// Offset in nanoseconds. Positive shifts the lookup window into the past.
+    pub offset_ns: i64,
     /// Label column names used for grouping series.
     pub label_columns: Vec<String>,
     /// Output schema: timestamp, timestamps (list), values (list), labels.
@@ -79,6 +82,7 @@ impl RangeVectorEval {
         input: LogicalPlan,
         timestamp_ns: i64,
         range_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;
@@ -89,6 +93,7 @@ impl RangeVectorEval {
             start_ns: timestamp_ns,
             end_ns: timestamp_ns,
             step_ns: 1,
+            offset_ns,
             label_columns,
             output_schema,
         })
@@ -101,6 +106,7 @@ impl RangeVectorEval {
         end_ns: i64,
         step_ns: i64,
         range_ns: i64,
+        offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;
@@ -111,6 +117,7 @@ impl RangeVectorEval {
             start_ns,
             end_ns,
             step_ns,
+            offset_ns,
             label_columns,
             output_schema,
         })
@@ -138,18 +145,20 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "RangeVectorEval: ts={ts}, range={}ns, group_by=[{}]",
+                "RangeVectorEval: ts={ts}, range={}ns, offset={}ns, group_by=[{}]",
                 self.range_ns,
+                self.offset_ns,
                 self.label_columns.join(", ")
             )
         } else {
             write!(
                 f,
-                "RangeVectorEval: range=[{}, {}], step={}ns, window={}ns, group_by=[{}]",
+                "RangeVectorEval: range=[{}, {}], step={}ns, window={}ns, offset={}ns, group_by=[{}]",
                 self.start_ns,
                 self.end_ns,
                 self.step_ns,
                 self.range_ns,
+                self.offset_ns,
                 self.label_columns.join(", ")
             )
         }
@@ -167,6 +176,7 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
             start_ns: self.start_ns,
             end_ns: self.end_ns,
             step_ns: self.step_ns,
+            offset_ns: self.offset_ns,
             label_columns: self.label_columns.clone(),
             output_schema: Arc::clone(&self.output_schema),
         })
@@ -186,6 +196,7 @@ impl PartialEq for RangeVectorEval {
             && self.start_ns == other.start_ns
             && self.end_ns == other.end_ns
             && self.step_ns == other.step_ns
+            && self.offset_ns == other.offset_ns
             && self.label_columns == other.label_columns
     }
 }
@@ -199,6 +210,7 @@ impl Hash for RangeVectorEval {
         self.start_ns.hash(state);
         self.end_ns.hash(state);
         self.step_ns.hash(state);
+        self.offset_ns.hash(state);
         self.label_columns.hash(state);
     }
 }

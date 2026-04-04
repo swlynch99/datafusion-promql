@@ -10,3 +10,4 @@ mod round_function;
 mod parquet_query;
 #[cfg(feature = "parquet")]
 mod rezolus_query;
+mod inspect_offset;
