@@ -32,6 +32,19 @@ pub(crate) enum InstantFunction {
     Atanh,
     /// Round each sample value up to the nearest integer.
     Ceil,
+    /// Clamp each sample value to the range `[min, max]`.
+    Clamp {
+        min: f64,
+        max: f64,
+    },
+    /// Clamp each sample value to have a maximum of the given scalar.
+    ClampMax {
+        max: f64,
+    },
+    /// Clamp each sample value to have a minimum of the given scalar.
+    ClampMin {
+        min: f64,
+    },
     /// Cosine of each sample value (radians).
     Cos,
     /// Hyperbolic cosine of each sample value.
@@ -78,6 +91,9 @@ impl fmt::Display for InstantFunction {
             Self::Atan => write!(f, "atan"),
             Self::Atanh => write!(f, "atanh"),
             Self::Ceil => write!(f, "ceil"),
+            Self::Clamp { min, max } => write!(f, "clamp(min={min}, max={max})"),
+            Self::ClampMax { max } => write!(f, "clamp_max(max={max})"),
+            Self::ClampMin { min } => write!(f, "clamp_min(min={min})"),
             Self::Cos => write!(f, "cos"),
             Self::Cosh => write!(f, "cosh"),
             Self::Deg => write!(f, "deg"),
@@ -111,6 +127,9 @@ impl InstantFunction {
             Self::Atan => value.atan(),
             Self::Atanh => value.atanh(),
             Self::Ceil => value.ceil(),
+            Self::Clamp { min, max } => promql_clamp(value, *min, *max),
+            Self::ClampMax { max } => value.min(*max),
+            Self::ClampMin { min } => value.max(*min),
             Self::Cos => value.cos(),
             Self::Cosh => value.cosh(),
             Self::Deg => value.to_degrees(),
@@ -177,6 +196,11 @@ impl PartialEq for InstantFunction {
             | (Self::Sqrt, Self::Sqrt)
             | (Self::Tan, Self::Tan)
             | (Self::Tanh, Self::Tanh) => true,
+            (Self::Clamp { min: a1, max: a2 }, Self::Clamp { min: b1, max: b2 }) => {
+                a1.to_bits() == b1.to_bits() && a2.to_bits() == b2.to_bits()
+            }
+            (Self::ClampMax { max: a }, Self::ClampMax { max: b }) => a.to_bits() == b.to_bits(),
+            (Self::ClampMin { min: a }, Self::ClampMin { min: b }) => a.to_bits() == b.to_bits(),
             (Self::Round { to_nearest: a }, Self::Round { to_nearest: b }) => {
                 a.to_bits() == b.to_bits()
             }
@@ -189,8 +213,15 @@ impl Eq for InstantFunction {}
 impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         std::mem::discriminant(self).hash(state);
-        if let Self::Round { to_nearest } = self {
-            to_nearest.to_bits().hash(state);
+        match self {
+            Self::Clamp { min, max } => {
+                min.to_bits().hash(state);
+                max.to_bits().hash(state);
+            }
+            Self::ClampMax { max } => max.to_bits().hash(state),
+            Self::ClampMin { min } => min.to_bits().hash(state),
+            Self::Round { to_nearest } => to_nearest.to_bits().hash(state),
+            _ => {}
         }
     }
 }
@@ -209,6 +240,19 @@ pub(crate) fn lookup_instant_function(name: &str, extra_args: &[f64]) -> Option<
         "atan" => Some(InstantFunction::Atan),
         "atanh" => Some(InstantFunction::Atanh),
         "ceil" => Some(InstantFunction::Ceil),
+        "clamp" => {
+            let min = extra_args.first().copied()?;
+            let max = extra_args.get(1).copied()?;
+            Some(InstantFunction::Clamp { min, max })
+        }
+        "clamp_max" => {
+            let max = extra_args.first().copied()?;
+            Some(InstantFunction::ClampMax { max })
+        }
+        "clamp_min" => {
+            let min = extra_args.first().copied()?;
+            Some(InstantFunction::ClampMin { min })
+        }
         "cos" => Some(InstantFunction::Cos),
         "cosh" => Some(InstantFunction::Cosh),
         "deg" => Some(InstantFunction::Deg),
@@ -244,6 +288,16 @@ fn promql_round(value: f64, to_nearest: f64) -> f64 {
     (value / to_nearest + 0.5).floor() * to_nearest
 }
 
+/// PromQL `clamp(v, min, max)` semantics.
+///
+/// Returns NaN if min > max, matching Prometheus behavior.
+fn promql_clamp(value: f64, min: f64, max: f64) -> f64 {
+    if min > max {
+        return f64::NAN;
+    }
+    value.clamp(min, max)
+}
+
 /// Convert an `InstantFunction` to a DataFusion logical `Expr` applied to the
 /// given input expression, aliased as `"value"`.
 pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr {
@@ -256,6 +310,18 @@ pub(crate) fn instant_func_to_expr(func: &InstantFunction, input: Expr) -> Expr 
         InstantFunction::Atan => expr_fn::atan(input),
         InstantFunction::Atanh => expr_fn::atanh(input),
         InstantFunction::Ceil => expr_fn::ceil(input),
+        InstantFunction::Clamp { min, max } => {
+            let udf = make_promql_clamp_udf(*min, *max);
+            udf.call(vec![input])
+        }
+        InstantFunction::ClampMax { max } => {
+            let udf = make_promql_clamp_max_udf(*max);
+            udf.call(vec![input])
+        }
+        InstantFunction::ClampMin { min } => {
+            let udf = make_promql_clamp_min_udf(*min);
+            udf.call(vec![input])
+        }
         InstantFunction::Cos => expr_fn::cos(input),
         InstantFunction::Cosh => expr_fn::cosh(input),
         InstantFunction::Deg => expr_fn::degrees(input),
@@ -341,6 +407,219 @@ impl ScalarUDFImpl for PromqlRoundUdf {
                 let result = array
                     .as_primitive::<Float64Type>()
                     .unary::<_, Float64Type>(|x| promql_round(x, to_nearest));
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => Ok(arg),
+        }
+    }
+}
+
+// --- clamp UDF ---
+
+fn make_promql_clamp_udf(min: f64, max: f64) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(PromqlClampUdf::new(min, max)))
+}
+
+#[derive(Debug)]
+struct PromqlClampUdf {
+    min: f64,
+    max: f64,
+    signature: Signature,
+}
+
+impl PromqlClampUdf {
+    fn new(min: f64, max: f64) -> Self {
+        Self {
+            min,
+            max,
+            signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq for PromqlClampUdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.min.to_bits() == other.min.to_bits() && self.max.to_bits() == other.max.to_bits()
+    }
+}
+impl Eq for PromqlClampUdf {}
+
+impl std::hash::Hash for PromqlClampUdf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.min.to_bits().hash(state);
+        self.max.to_bits().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for PromqlClampUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "promql_clamp"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        let (min, max) = (self.min, self.max);
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(promql_clamp(v, min, max))),
+            )),
+            ColumnarValue::Array(array) => {
+                let result = array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| promql_clamp(x, min, max));
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => Ok(arg),
+        }
+    }
+}
+
+// --- clamp_min UDF ---
+
+fn make_promql_clamp_min_udf(min: f64) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(PromqlClampMinUdf::new(min)))
+}
+
+#[derive(Debug)]
+struct PromqlClampMinUdf {
+    min: f64,
+    signature: Signature,
+}
+
+impl PromqlClampMinUdf {
+    fn new(min: f64) -> Self {
+        Self {
+            min,
+            signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq for PromqlClampMinUdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.min.to_bits() == other.min.to_bits()
+    }
+}
+impl Eq for PromqlClampMinUdf {}
+
+impl std::hash::Hash for PromqlClampMinUdf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.min.to_bits().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for PromqlClampMinUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "promql_clamp_min"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        let min = self.min;
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(v.max(min))),
+            )),
+            ColumnarValue::Array(array) => {
+                let result = array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| x.max(min));
+                Ok(ColumnarValue::Array(Arc::new(result)))
+            }
+            _ => Ok(arg),
+        }
+    }
+}
+
+// --- clamp_max UDF ---
+
+fn make_promql_clamp_max_udf(max: f64) -> Arc<ScalarUDF> {
+    Arc::new(ScalarUDF::new_from_impl(PromqlClampMaxUdf::new(max)))
+}
+
+#[derive(Debug)]
+struct PromqlClampMaxUdf {
+    max: f64,
+    signature: Signature,
+}
+
+impl PromqlClampMaxUdf {
+    fn new(max: f64) -> Self {
+        Self {
+            max,
+            signature: Signature::uniform(1, vec![DataType::Float64], Volatility::Immutable),
+        }
+    }
+}
+
+impl PartialEq for PromqlClampMaxUdf {
+    fn eq(&self, other: &Self) -> bool {
+        self.max.to_bits() == other.max.to_bits()
+    }
+}
+impl Eq for PromqlClampMaxUdf {}
+
+impl std::hash::Hash for PromqlClampMaxUdf {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.max.to_bits().hash(state);
+    }
+}
+
+impl ScalarUDFImpl for PromqlClampMaxUdf {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "promql_clamp_max"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> DFResult<DataType> {
+        Ok(DataType::Float64)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DFResult<ColumnarValue> {
+        let [arg] = take_function_args(self.name(), args.args)?;
+        let max = self.max;
+
+        match arg {
+            ColumnarValue::Scalar(ScalarValue::Float64(Some(v))) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(Some(v.min(max))),
+            )),
+            ColumnarValue::Array(array) => {
+                let result = array
+                    .as_primitive::<Float64Type>()
+                    .unary::<_, Float64Type>(|x| x.min(max));
                 Ok(ColumnarValue::Array(Arc::new(result)))
             }
             _ => Ok(arg),
@@ -776,5 +1055,136 @@ mod tests {
             lookup_instant_function("sqrt", &[]),
             Some(InstantFunction::Sqrt)
         ));
+    }
+
+    // --- clamp tests ---
+
+    #[test]
+    fn test_clamp_within_range() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_below_min() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(-5.0), 1.0);
+    }
+
+    #[test]
+    fn test_clamp_above_max() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(15.0), 10.0);
+    }
+
+    #[test]
+    fn test_clamp_min_greater_than_max_returns_nan() {
+        let f = InstantFunction::Clamp {
+            min: 10.0,
+            max: 1.0,
+        };
+        assert!(f.evaluate(5.0).is_nan());
+    }
+
+    #[test]
+    fn test_clamp_at_boundaries() {
+        let f = InstantFunction::Clamp {
+            min: 1.0,
+            max: 10.0,
+        };
+        assert_eq!(f.evaluate(1.0), 1.0);
+        assert_eq!(f.evaluate(10.0), 10.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp() {
+        assert_eq!(
+            lookup_instant_function("clamp", &[1.0, 10.0]),
+            Some(InstantFunction::Clamp {
+                min: 1.0,
+                max: 10.0
+            })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_missing_args() {
+        assert!(lookup_instant_function("clamp", &[]).is_none());
+        assert!(lookup_instant_function("clamp", &[1.0]).is_none());
+    }
+
+    // --- clamp_min tests ---
+
+    #[test]
+    fn test_clamp_min_below() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(1.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_min_above() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(10.0), 10.0);
+    }
+
+    #[test]
+    fn test_clamp_min_equal() {
+        let f = InstantFunction::ClampMin { min: 5.0 };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp_min() {
+        assert_eq!(
+            lookup_instant_function("clamp_min", &[3.0]),
+            Some(InstantFunction::ClampMin { min: 3.0 })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_min_missing_args() {
+        assert!(lookup_instant_function("clamp_min", &[]).is_none());
+    }
+
+    // --- clamp_max tests ---
+
+    #[test]
+    fn test_clamp_max_above() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(10.0), 5.0);
+    }
+
+    #[test]
+    fn test_clamp_max_below() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(1.0), 1.0);
+    }
+
+    #[test]
+    fn test_clamp_max_equal() {
+        let f = InstantFunction::ClampMax { max: 5.0 };
+        assert_eq!(f.evaluate(5.0), 5.0);
+    }
+
+    #[test]
+    fn test_lookup_clamp_max() {
+        assert_eq!(
+            lookup_instant_function("clamp_max", &[7.0]),
+            Some(InstantFunction::ClampMax { max: 7.0 })
+        );
+    }
+
+    #[test]
+    fn test_lookup_clamp_max_missing_args() {
+        assert!(lookup_instant_function("clamp_max", &[]).is_none());
     }
 }
