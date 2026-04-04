@@ -8,4 +8,5 @@ fi
 
 echo '{"async": true, "asyncTimeout": 300000}'
 
+rustup toolchain install nightly --component rustfmt --profile minimal
 cargo build
