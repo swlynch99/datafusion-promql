@@ -34,7 +34,11 @@ impl ParquetMetricSource {
         let path_str = path.as_ref().to_string_lossy().to_string();
 
         let ctx = SessionContext::new();
-        ctx.register_parquet("__parquet_src", &path_str, ParquetReadOptions::default())
+        let parquet_options = ParquetReadOptions {
+            file_sort_order: vec![vec![col("timestamp").sort(true, false)]],
+            ..Default::default()
+        };
+        ctx.register_parquet("__parquet_src", &path_str, parquet_options)
             .await
             .map_err(|e| PromqlError::DataSource(format!("failed to register parquet: {e}")))?;
 
