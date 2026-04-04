@@ -11,8 +11,8 @@ use crate::func::{
     AggregateFunction, lookup_aggregate_function, lookup_instant_function, lookup_range_function,
 };
 use crate::node::{
-    BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeVectorEval,
-    ScalarBinaryEval, VectorMatching, convert_binary_op,
+    BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
+    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
@@ -160,9 +160,9 @@ async fn plan_call(
         let (child_plan, label_columns) =
             plan_vector_selector(&matrix.vs, source, time_range, range_ns).await?;
 
-        // Wrap in RangeVectorEval node.
-        let node = if let Some(ts) = params.eval_ts_ns {
-            RangeVectorEval::instant(child_plan, ts, range_ns, range_func, label_columns)
+        // Wrap in RangeVectorEval (windowing) then RangeFunctionEval (function).
+        let window_node = if let Some(ts) = params.eval_ts_ns {
+            RangeVectorEval::instant(child_plan, ts, range_ns, label_columns)?
         } else {
             RangeVectorEval::range(
                 child_plan,
@@ -170,13 +170,18 @@ async fn plan_call(
                 params.end_ns,
                 params.step_ns,
                 range_ns,
-                range_func,
                 label_columns,
-            )
+            )?
         };
 
+        let window_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(window_node),
+        });
+
+        let func_node = RangeFunctionEval::new(window_plan, range_func)?;
+
         return Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(node),
+            node: Arc::new(func_node),
         }));
     }
 

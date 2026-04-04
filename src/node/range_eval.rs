@@ -2,25 +2,26 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-use datafusion::common::DFSchemaRef;
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
-use crate::func::RangeFunction;
+use crate::error::{PromqlError, Result};
 
-/// Custom logical node that applies a range vector function over a sliding
-/// window of samples at each evaluation timestamp.
+/// Custom logical node that groups samples by metric series and collects
+/// them into per-window arrays at each evaluation timestamp.
 ///
 /// For each step timestamp `t` and each series, this node collects all samples
-/// in `[t - range_ns, t]` and applies the range function (e.g. rate, delta).
+/// in `[t - range_ns, t]` and outputs them as `List<Int64>` (timestamps) and
+/// `List<Float64>` (values) arrays.
 #[derive(Debug, Clone)]
 pub(crate) struct RangeVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
     /// The range window duration in nanoseconds (e.g. 5m = 300_000_000_000).
     pub range_ns: i64,
-    /// The range function to apply.
-    pub func: RangeFunction,
     /// For an instant query, the single evaluation timestamp (ns).
     pub eval_ts_ns: Option<i64>,
     pub start_ns: i64,
@@ -28,6 +29,48 @@ pub(crate) struct RangeVectorEval {
     pub step_ns: i64,
     /// Label column names used for grouping series.
     pub label_columns: Vec<String>,
+    /// Output schema: timestamp, timestamps (list), values (list), labels.
+    pub output_schema: DFSchemaRef,
+}
+
+/// Compute the output schema for a range vector windowing node.
+///
+/// Output columns:
+/// - `timestamp: Int64` — the evaluation timestamp
+/// - `timestamps: List<Int64>` — sample timestamps within the window
+/// - `values: List<Float64>` — sample values within the window
+/// - label columns from the input (Utf8)
+pub(crate) fn compute_range_vector_schema(
+    input: &LogicalPlan,
+    label_columns: &[String],
+) -> Result<DFSchemaRef> {
+    let mut fields = vec![
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new(
+            "timestamps",
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            false,
+        ),
+        Field::new(
+            "values",
+            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            false,
+        ),
+    ];
+
+    // Carry over label columns from the input schema.
+    for label in label_columns {
+        let input_field = input
+            .schema()
+            .field_with_unqualified_name(label)
+            .map_err(|e| PromqlError::Plan(format!("missing label column {label}: {e}")))?;
+        fields.push(input_field.as_ref().clone());
+    }
+
+    let schema = Schema::new(fields);
+    let df_schema =
+        DFSchema::try_from(schema).map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+    Ok(Arc::new(df_schema))
 }
 
 impl RangeVectorEval {
@@ -36,19 +79,19 @@ impl RangeVectorEval {
         input: LogicalPlan,
         timestamp_ns: i64,
         range_ns: i64,
-        func: RangeFunction,
         label_columns: Vec<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let output_schema = compute_range_vector_schema(&input, &label_columns)?;
+        Ok(Self {
             input,
             range_ns,
-            func,
             eval_ts_ns: Some(timestamp_ns),
             start_ns: timestamp_ns,
             end_ns: timestamp_ns,
             step_ns: 1,
             label_columns,
-        }
+            output_schema,
+        })
     }
 
     /// Create a node for a range query over `[start, end]` with step.
@@ -58,19 +101,19 @@ impl RangeVectorEval {
         end_ns: i64,
         step_ns: i64,
         range_ns: i64,
-        func: RangeFunction,
         label_columns: Vec<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let output_schema = compute_range_vector_schema(&input, &label_columns)?;
+        Ok(Self {
             input,
             range_ns,
-            func,
             eval_ts_ns: None,
             start_ns,
             end_ns,
             step_ns,
             label_columns,
-        }
+            output_schema,
+        })
     }
 }
 
@@ -84,7 +127,7 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
     }
 
     fn schema(&self) -> &DFSchemaRef {
-        self.input.schema()
+        &self.output_schema
     }
 
     fn expressions(&self) -> Vec<datafusion::logical_expr::Expr> {
@@ -95,16 +138,14 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "RangeVectorEval: func={}, ts={ts}, range={}ns, group_by=[{}]",
-                self.func,
+                "RangeVectorEval: ts={ts}, range={}ns, group_by=[{}]",
                 self.range_ns,
                 self.label_columns.join(", ")
             )
         } else {
             write!(
                 f,
-                "RangeVectorEval: func={}, range=[{}, {}], step={}ns, window={}ns, group_by=[{}]",
-                self.func,
+                "RangeVectorEval: range=[{}, {}], step={}ns, window={}ns, group_by=[{}]",
                 self.start_ns,
                 self.end_ns,
                 self.step_ns,
@@ -122,12 +163,12 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
             range_ns: self.range_ns,
-            func: self.func,
             eval_ts_ns: self.eval_ts_ns,
             start_ns: self.start_ns,
             end_ns: self.end_ns,
             step_ns: self.step_ns,
             label_columns: self.label_columns.clone(),
+            output_schema: Arc::clone(&self.output_schema),
         })
     }
 
@@ -141,7 +182,6 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
 impl PartialEq for RangeVectorEval {
     fn eq(&self, other: &Self) -> bool {
         self.range_ns == other.range_ns
-            && self.func == other.func
             && self.eval_ts_ns == other.eval_ts_ns
             && self.start_ns == other.start_ns
             && self.end_ns == other.end_ns
@@ -155,7 +195,6 @@ impl Eq for RangeVectorEval {}
 impl Hash for RangeVectorEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.range_ns.hash(state);
-        self.func.hash(state);
         self.eval_ts_ns.hash(state);
         self.start_ns.hash(state);
         self.end_ns.hash(state);

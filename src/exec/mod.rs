@@ -1,10 +1,12 @@
 mod binary_eval;
 mod instant_eval;
 mod range_eval;
+mod range_func_eval;
 
 pub(crate) use binary_eval::{BinaryExec, ScalarBinaryExec};
 pub(crate) use instant_eval::InstantVectorExec;
 pub(crate) use range_eval::RangeVectorExec;
+pub(crate) use range_func_eval::RangeFunctionExec;
 
 use std::sync::Arc;
 
@@ -16,7 +18,9 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::node::{BinaryEval, InstantVectorEval, RangeVectorEval, ScalarBinaryEval};
+use crate::node::{
+    BinaryEval, InstantVectorEval, RangeFunctionEval, RangeVectorEval, ScalarBinaryEval,
+};
 
 /// Extension planner that converts our custom logical nodes into physical plans.
 pub struct PromqlExtensionPlanner;
@@ -50,13 +54,27 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
             let exec = RangeVectorExec::new(
                 child,
                 eval.range_ns,
-                eval.func,
                 eval.eval_ts_ns,
                 eval.start_ns,
                 eval.end_ns,
                 eval.step_ns,
                 eval.label_columns.clone(),
             );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node.as_any().downcast_ref::<RangeFunctionEval>() {
+            let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
+            // Extract label columns from the output schema (everything except
+            // timestamp and value).
+            let label_columns: Vec<String> = eval
+                .output_schema
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .filter(|n| n != "timestamp" && n != "value")
+                .collect();
+            let exec = RangeFunctionExec::new(child, eval.func, label_columns);
             return Ok(Some(Arc::new(exec)));
         }
 

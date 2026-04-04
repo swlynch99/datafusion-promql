@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, Int64Builder, StringBuilder};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{Float64Builder, Int64Builder, ListBuilder, StringBuilder};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -13,21 +13,47 @@ use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-use crate::func::RangeFunction;
-
-/// Physical plan node that applies a range vector function over a sliding
-/// window of samples at each evaluation timestamp.
+/// Physical plan node that groups samples by metric series and collects
+/// them into per-window arrays at each evaluation timestamp.
+///
+/// For each step timestamp `t` and each series, this node collects all samples
+/// in `[t - range_ns, t]` and outputs:
+/// - `timestamp: Int64` — the evaluation timestamp
+/// - `timestamps: List<Int64>` — sample timestamps within the window
+/// - `values: List<Float64>` — sample values within the window
+/// - label columns (Utf8)
 #[derive(Debug)]
 pub(crate) struct RangeVectorExec {
     child: Arc<dyn ExecutionPlan>,
     range_ns: i64,
-    func: RangeFunction,
     eval_ts_ns: Option<i64>,
     start_ns: i64,
     end_ns: i64,
     step_ns: i64,
     label_columns: Vec<String>,
+    output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
+}
+
+/// Build the output Arrow schema for the windowing node.
+fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
+    let mut fields = vec![
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new(
+            "timestamps",
+            DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+            false,
+        ),
+        Field::new(
+            "values",
+            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            false,
+        ),
+    ];
+    for label in label_columns {
+        fields.push(Field::new(label, DataType::Utf8, true));
+    }
+    Arc::new(Schema::new(fields))
 }
 
 impl RangeVectorExec {
@@ -35,16 +61,15 @@ impl RangeVectorExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
         range_ns: i64,
-        func: RangeFunction,
         eval_ts_ns: Option<i64>,
         start_ns: i64,
         end_ns: i64,
         step_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
-        let schema = child.schema();
+        let output_schema = compute_output_schema(&label_columns);
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(schema),
+            EquivalenceProperties::new(Arc::clone(&output_schema)),
             Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
@@ -52,12 +77,12 @@ impl RangeVectorExec {
         Self {
             child,
             range_ns,
-            func,
             eval_ts_ns,
             start_ns,
             end_ns,
             step_ns,
             label_columns,
+            output_schema,
             properties,
         }
     }
@@ -78,11 +103,7 @@ impl RangeVectorExec {
 
 impl DisplayAs for RangeVectorExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "RangeVectorExec: func={}, range={}ns",
-            self.func, self.range_ns
-        )
+        write!(f, "RangeVectorExec: range={}ns", self.range_ns)
     }
 }
 
@@ -96,7 +117,7 @@ impl ExecutionPlan for RangeVectorExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.child.schema()
+        Arc::clone(&self.output_schema)
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -118,7 +139,6 @@ impl ExecutionPlan for RangeVectorExec {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             self.range_ns,
-            self.func,
             self.eval_ts_ns,
             self.start_ns,
             self.end_ns,
@@ -133,10 +153,9 @@ impl ExecutionPlan for RangeVectorExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
-        let schema = self.schema();
+        let output_schema = Arc::clone(&self.output_schema);
         let eval_timestamps = self.eval_timestamps();
         let range_ns = self.range_ns;
-        let func = self.func;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
@@ -195,10 +214,11 @@ impl ExecutionPlan for RangeVectorExec {
                 samples.sort_by_key(|(ts, _)| *ts);
             }
 
-            // For each eval timestamp and each series, collect samples in
-            // [t - range_ns, t] and apply the range function.
+            // Build output arrays: for each eval timestamp and each series,
+            // collect samples in [t - range_ns, t] into list arrays.
             let mut out_ts = Int64Builder::new();
-            let mut out_val = Float64Builder::new();
+            let mut out_timestamps = ListBuilder::new(Int64Builder::new());
+            let mut out_values = ListBuilder::new(Float64Builder::new());
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
@@ -210,33 +230,48 @@ impl ExecutionPlan for RangeVectorExec {
                     let end_idx = samples.partition_point(|(ts, _)| *ts <= eval_ts);
 
                     let window = &samples[start_idx..end_idx];
-                    if let Some(value) = func.evaluate(window) {
-                        out_ts.append_value(eval_ts);
-                        out_val.append_value(value);
-                        for (i, label_val) in key.iter().enumerate() {
-                            out_labels[i].append_value(label_val);
-                        }
+                    if window.is_empty() {
+                        continue;
+                    }
+
+                    // Emit the evaluation timestamp.
+                    out_ts.append_value(eval_ts);
+
+                    // Emit window sample timestamps as a list.
+                    for &(ts, _) in window {
+                        out_timestamps.values().append_value(ts);
+                    }
+                    out_timestamps.append(true);
+
+                    // Emit window sample values as a list.
+                    for &(_, val) in window {
+                        out_values.values().append_value(val);
+                    }
+                    out_values.append(true);
+
+                    // Emit label values.
+                    for (i, label_val) in key.iter().enumerate() {
+                        out_labels[i].append_value(label_val);
                     }
                 }
             }
 
-            // Build output RecordBatch with the same schema as input.
+            // Build output columns in schema order.
             let mut columns: Vec<arrow::array::ArrayRef> = Vec::new();
-
-            for field in schema.fields() {
+            for field in output_schema.fields() {
                 let name = field.name().as_str();
                 if name == "timestamp" {
                     columns.push(Arc::new(out_ts.finish()));
-                } else if name == "value" {
-                    columns.push(Arc::new(out_val.finish()));
+                } else if name == "timestamps" {
+                    columns.push(Arc::new(out_timestamps.finish()));
+                } else if name == "values" {
+                    columns.push(Arc::new(out_values.finish()));
                 } else if let Some(idx) = label_columns.iter().position(|n| n == name) {
                     columns.push(Arc::new(out_labels[idx].finish()));
-                } else {
-                    columns.push(arrow::array::new_empty_array(field.data_type()));
                 }
             }
 
-            let batch = RecordBatch::try_new(schema, columns)?;
+            let batch = RecordBatch::try_new(output_schema, columns)?;
             Ok(batch)
         });
 
