@@ -80,12 +80,7 @@ async fn run_instant(engine: &PromqlEngine, query: &str) -> Vec<(String, f64)> {
             samples.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
             samples
                 .iter()
-                .map(|s| {
-                    (
-                        s.labels.get("instance").unwrap().clone(),
-                        s.value,
-                    )
-                })
+                .map(|s| (s.labels.get("instance").unwrap().clone(), s.value))
                 .collect()
         }
         other => panic!("expected Vector result, got {other:?}"),
@@ -94,9 +89,15 @@ async fn run_instant(engine: &PromqlEngine, query: &str) -> Vec<(String, f64)> {
 
 fn assert_close(actual: f64, expected: f64, func: &str, input: &str) {
     if expected.is_nan() {
-        assert!(actual.is_nan(), "{func}({input}): expected NaN, got {actual}");
+        assert!(
+            actual.is_nan(),
+            "{func}({input}): expected NaN, got {actual}"
+        );
     } else if expected.is_infinite() {
-        assert_eq!(actual, expected, "{func}({input}): expected {expected}, got {actual}");
+        assert_eq!(
+            actual, expected,
+            "{func}({input}): expected {expected}, got {actual}"
+        );
     } else {
         assert!(
             (actual - expected).abs() < 1e-10,
