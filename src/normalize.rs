@@ -8,7 +8,7 @@ use arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::Column;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Union};
 use datafusion::prelude::{cast, col, lit};
 
 /// A column that matched the requested metric, with its parsed labels.
@@ -150,20 +150,16 @@ pub(crate) fn normalize_wide_to_long(
         branch_plans.push(plan);
     }
 
-    // UNION ALL all branches into a single plan.
-    let mut plans = branch_plans.into_iter();
-    let first = plans.next().ok_or_else(|| {
-        PromqlError::DataSource(format!("no matched columns for '{metric_name}'"))
-    })?;
-    let union_plan = plans.try_fold(first, |acc, plan| {
-        LogicalPlanBuilder::from(acc)
-            .union(plan)
-            .map_err(|e| PromqlError::Plan(format!("failed to build union: {e}")))
-            .and_then(|b| {
-                b.build()
-                    .map_err(|e| PromqlError::Plan(format!("failed to build union plan: {e}")))
-            })
-    })?;
+    // UNION ALL all branches into a single flat Union node.
+    let union_plan = if branch_plans.len() == 1 {
+        branch_plans.into_iter().next().unwrap()
+    } else {
+        let inputs: Vec<Arc<LogicalPlan>> = branch_plans.into_iter().map(Arc::new).collect();
+        LogicalPlan::Union(
+            Union::try_new_with_loose_types(inputs)
+                .map_err(|e| PromqlError::Plan(format!("failed to build union: {e}")))?,
+        )
+    };
 
     let mut label_columns = vec!["__name__".to_string()];
     label_columns.extend(all_label_keys);
