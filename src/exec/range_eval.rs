@@ -8,10 +8,12 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
 use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+use super::label_timestamp_ordering;
 
 /// Physical plan node that groups samples by metric series and collects
 /// them into per-window arrays at each evaluation timestamp.
@@ -129,6 +131,13 @@ impl ExecutionPlan for RangeVectorExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![label_timestamp_ordering(
+            &self.label_columns,
+            &self.child.schema(),
+        )]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

@@ -7,10 +7,12 @@ use arrow::datatypes::{DataType, Field, Float64Type, Schema, SchemaRef, UInt64Ty
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
 use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
+
+use super::label_timestamp_ordering;
 
 use crate::func::RangeFunction;
 
@@ -89,6 +91,13 @@ impl ExecutionPlan for RangeFunctionExec {
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
         vec![Distribution::SinglePartition]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        vec![label_timestamp_ordering(
+            &self.label_columns,
+            &self.child.schema(),
+        )]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

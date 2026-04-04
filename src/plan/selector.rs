@@ -144,8 +144,13 @@ pub(crate) async fn plan_vector_selector(
                 &ds_matchers,
             )?;
 
-            // Apply time range filter (if bounded) and sort on the normalized output.
-            // Use Int64 literals directly since the normalized timestamp is always Int64 ns.
+            // Apply time range filter (if bounded) on the normalized output.
+            // Use UInt64 literals directly since the normalized timestamp is always UInt64 ns.
+            //
+            // No outer sort is needed here: each UNION ALL child is already
+            // sorted by timestamp, and label columns are constant literals
+            // within each child. The downstream exec nodes group by series
+            // key and can rely on within-series timestamp ordering.
             let mut builder = LogicalPlanBuilder::from(plan);
             if let Some(start) = expanded_range.start_ns {
                 builder = builder
@@ -158,8 +163,6 @@ pub(crate) async fn plan_vector_selector(
                     .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?;
             }
             let plan = builder
-                .sort(vec![col("timestamp").sort(true, false)])
-                .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
                 .build()
                 .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
 
@@ -204,9 +207,16 @@ pub(crate) async fn plan_vector_selector(
         plan
     };
 
-    // Sort by timestamp for the InstantVectorEval node.
+    // Sort by label columns first (to group series together), then by
+    // timestamp within each series. This ensures downstream exec nodes
+    // receive data ordered by timestamp within each partition/series.
+    let mut sort_exprs: Vec<datafusion::logical_expr::expr::Sort> = label_columns
+        .iter()
+        .map(|l| col(l.as_str()).sort(true, false))
+        .collect();
+    sort_exprs.push(col("timestamp").sort(true, false));
     let plan = plan
-        .sort(vec![col("timestamp").sort(true, false)])
+        .sort(sort_exprs)
         .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?;
 
     let plan = plan
