@@ -4,9 +4,9 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, cast};
 use datafusion::optimizer::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 
-use crate::node::ScalarFunction;
+use crate::node::InstantFunction;
 
-/// Optimizer rule that rewrites `ScalarFunction` extension nodes into
+/// Optimizer rule that rewrites `InstantFunction` extension nodes into
 /// standard DataFusion `Projection` plans with the stored UDF expression
 /// applied to the `value` column.
 #[derive(Debug)]
@@ -30,7 +30,7 @@ impl OptimizerRule for InstantFuncToProjection {
             return Ok(Transformed::no(plan));
         };
 
-        let Some(eval) = ext.node.as_any().downcast_ref::<ScalarFunction>() else {
+        let Some(eval) = ext.node.as_any().downcast_ref::<InstantFunction>() else {
             return Ok(Transformed::no(plan));
         };
 
@@ -39,7 +39,7 @@ impl OptimizerRule for InstantFuncToProjection {
 
         // Build projection expressions matching the output schema.
         // We alias every column to strip table qualifiers and ensure the
-        // output schema matches the original ScalarFunction output exactly.
+        // output schema matches the original InstantFunction output exactly.
         let mut exprs: Vec<Expr> = Vec::new();
         for field in eval.output_schema.fields() {
             let name = field.name();

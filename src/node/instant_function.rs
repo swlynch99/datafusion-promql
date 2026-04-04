@@ -19,7 +19,7 @@ use crate::error::{PromqlError, Result};
 /// This node has no corresponding physical node. It must always be lowered
 /// to a projection by the `InstantFuncToProjection` optimizer rule.
 #[derive(Debug, Clone)]
-pub(crate) struct ScalarFunction {
+pub(crate) struct InstantFunction {
     pub input: LogicalPlan,
     /// The scalar expression to apply to the `value` column.
     /// This should be a DataFusion expression that takes a column reference
@@ -30,7 +30,7 @@ pub(crate) struct ScalarFunction {
     pub output_schema: DFSchemaRef,
 }
 
-impl ScalarFunction {
+impl InstantFunction {
     pub fn new(
         input: LogicalPlan,
         func_expr: datafusion::logical_expr::Expr,
@@ -62,9 +62,9 @@ fn compute_output_schema(input: &LogicalPlan) -> Result<DFSchemaRef> {
     Ok(Arc::new(df_schema))
 }
 
-impl UserDefinedLogicalNodeCore for ScalarFunction {
+impl UserDefinedLogicalNodeCore for InstantFunction {
     fn name(&self) -> &str {
-        "ScalarFunction"
+        "InstantFunction"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -80,7 +80,7 @@ impl UserDefinedLogicalNodeCore for ScalarFunction {
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ScalarFunction: func={}", self.func_name)
+        write!(f, "InstantFunction: func={}", self.func_name)
     }
 
     fn with_exprs_and_inputs(
@@ -103,26 +103,26 @@ impl UserDefinedLogicalNodeCore for ScalarFunction {
     }
 }
 
-impl PartialEq for ScalarFunction {
+impl PartialEq for InstantFunction {
     fn eq(&self, other: &Self) -> bool {
         self.func_name == other.func_name
     }
 }
-impl Eq for ScalarFunction {}
+impl Eq for InstantFunction {}
 
-impl Hash for ScalarFunction {
+impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.func_name.hash(state);
     }
 }
 
-impl PartialOrd for ScalarFunction {
+impl PartialOrd for InstantFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ScalarFunction {
+impl Ord for InstantFunction {
     fn cmp(&self, other: &Self) -> Ordering {
         self.func_name.cmp(&other.func_name)
     }
