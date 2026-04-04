@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use datafusion::error::Result;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::UserDefinedLogicalNode;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::node::{
@@ -35,7 +36,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(eval) = node.as_any().downcast_ref::<InstantVectorEval>() {
-            let child = Arc::clone(&physical_inputs[0]);
+            let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
             let exec = InstantVectorExec::new(
                 child,
                 eval.eval_ts_ms,
@@ -49,7 +50,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
         }
 
         if let Some(eval) = node.as_any().downcast_ref::<RangeVectorEval>() {
-            let child = Arc::clone(&physical_inputs[0]);
+            let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
             let exec = RangeVectorExec::new(
                 child,
                 eval.range_ms,
@@ -102,5 +103,16 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
         }
 
         Ok(None)
+    }
+}
+
+/// Wrap `plan` in a [`CoalescePartitionsExec`] if it has more than one
+/// partition, so downstream single-partition exec nodes (InstantVectorExec,
+/// RangeVectorExec) see all rows in a single `execute(0)` call.
+fn coalesce_if_needed(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    if plan.output_partitioning().partition_count() > 1 {
+        Arc::new(CoalescePartitionsExec::new(plan))
+    } else {
+        plan
     }
 }
