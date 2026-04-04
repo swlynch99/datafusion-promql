@@ -3,7 +3,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, cast, col};
+use datafusion::logical_expr::expr::Sort;
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    cast, col, lit,
+};
 use promql_parser::parser::ast::Offset;
 use promql_parser::parser::{self, Expr, LabelModifier};
 
@@ -231,10 +235,12 @@ async fn plan_call(
     )))
 }
 
-/// Plan an aggregation expression (sum, avg, count, min, max).
+/// Plan an aggregation expression.
 ///
-/// Produces a native DataFusion `Aggregate` logical plan so that the
-/// optimizer can push projections and filters through it.
+/// For simple aggregations (sum, avg, count, min, max, stddev, stdvar, group),
+/// produces a native DataFusion `Aggregate` logical plan.
+/// For complex aggregations (topk, bottomk, quantile, count_values, limitk, limit_ratio),
+/// uses window functions or custom plan structures.
 async fn plan_aggregate(
     agg: &parser::AggregateExpr,
     source: &dyn MetricSource,
@@ -250,9 +256,81 @@ async fn plan_aggregate(
     let child_label_cols = label_columns_from_schema(child_plan.schema());
     let grouping_labels = compute_grouping_labels(&agg.modifier, &child_label_cols);
 
+    match func {
+        AggregateFunction::TopK | AggregateFunction::BottomK => {
+            let k = extract_int_param(agg, &func)?;
+            plan_topk_bottomk(child_plan, func, k, &grouping_labels, &child_label_cols)
+        }
+        AggregateFunction::LimitK => {
+            let k = extract_int_param(agg, &func)?;
+            plan_limitk(child_plan, k, &grouping_labels, &child_label_cols)
+        }
+        AggregateFunction::LimitRatio => {
+            let ratio = extract_float_param(agg, &func)?;
+            plan_limit_ratio(child_plan, ratio, &grouping_labels, &child_label_cols)
+        }
+        AggregateFunction::Quantile => {
+            let q = extract_float_param(agg, &func)?;
+            plan_quantile(child_plan, q, &grouping_labels)
+        }
+        AggregateFunction::CountValues => {
+            let label_name = extract_string_param(agg)?;
+            plan_count_values(child_plan, &label_name, &grouping_labels)
+        }
+        _ => plan_simple_aggregate(child_plan, func, &grouping_labels),
+    }
+}
+
+/// Extract an integer parameter from an aggregate expression (e.g. k in topk).
+fn extract_int_param(agg: &parser::AggregateExpr, func: &AggregateFunction) -> Result<i64> {
+    match &agg.param {
+        Some(param) => match param.as_ref() {
+            Expr::NumberLiteral(lit) => Ok(lit.val as i64),
+            _ => Err(PromqlError::Plan(format!(
+                "{func}() requires a scalar integer parameter"
+            ))),
+        },
+        None => Err(PromqlError::Plan(format!("{func}() requires a parameter"))),
+    }
+}
+
+/// Extract a float parameter from an aggregate expression (e.g. φ in quantile).
+fn extract_float_param(agg: &parser::AggregateExpr, func: &AggregateFunction) -> Result<f64> {
+    match &agg.param {
+        Some(param) => match param.as_ref() {
+            Expr::NumberLiteral(lit) => Ok(lit.val),
+            _ => Err(PromqlError::Plan(format!(
+                "{func}() requires a scalar parameter"
+            ))),
+        },
+        None => Err(PromqlError::Plan(format!("{func}() requires a parameter"))),
+    }
+}
+
+/// Extract a string parameter from an aggregate expression (e.g. label in count_values).
+fn extract_string_param(agg: &parser::AggregateExpr) -> Result<String> {
+    match &agg.param {
+        Some(param) => match param.as_ref() {
+            Expr::StringLiteral(s) => Ok(s.val.clone()),
+            _ => Err(PromqlError::Plan(
+                "count_values() requires a string parameter".into(),
+            )),
+        },
+        None => Err(PromqlError::Plan(
+            "count_values() requires a parameter".into(),
+        )),
+    }
+}
+
+/// Plan simple aggregations that map directly to DataFusion aggregate expressions.
+fn plan_simple_aggregate(
+    child_plan: LogicalPlan,
+    func: AggregateFunction,
+    grouping_labels: &[String],
+) -> Result<LogicalPlan> {
     // Build group-by expressions: always include timestamp, plus grouping labels.
     let mut group_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
-    for label in &grouping_labels {
+    for label in grouping_labels {
         group_exprs.push(col(label.as_str()));
     }
 
@@ -265,6 +343,10 @@ async fn plan_aggregate(
         AggregateFunction::Count => datafusion::functions_aggregate::count::count(value_col),
         AggregateFunction::Min => datafusion::functions_aggregate::min_max::min(value_col),
         AggregateFunction::Max => datafusion::functions_aggregate::min_max::max(value_col),
+        AggregateFunction::Stddev => datafusion::functions_aggregate::stddev::stddev_pop(value_col),
+        AggregateFunction::Stdvar => datafusion::functions_aggregate::variance::var_pop(value_col),
+        AggregateFunction::Group => datafusion::functions_aggregate::count::count(value_col),
+        _ => unreachable!("complex aggregations handled separately"),
     }
     .alias("value");
 
@@ -272,22 +354,360 @@ async fn plan_aggregate(
         .aggregate(group_exprs, vec![agg_expr])
         .map_err(|e| PromqlError::Plan(format!("aggregate plan error: {e}")))?;
 
-    // COUNT returns Int64 but downstream expects Float64 for the "value"
-    // column, so add a projection to cast.
-    if func == AggregateFunction::Count {
+    // COUNT and GROUP return Int64 but downstream expects Float64 for the "value"
+    // column. GROUP additionally needs to project all values as 1.0.
+    let needs_cast = matches!(func, AggregateFunction::Count | AggregateFunction::Group);
+    if needs_cast {
         let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
-        for label in &grouping_labels {
+        for label in grouping_labels {
             proj_exprs.push(col(label.as_str()));
         }
-        proj_exprs.push(cast(col("value"), DataType::Float64).alias("value"));
+        if func == AggregateFunction::Group {
+            // group() always returns 1.0
+            proj_exprs.push(lit(1.0_f64).alias("value"));
+        } else {
+            proj_exprs.push(cast(col("value"), DataType::Float64).alias("value"));
+        }
         builder = builder
             .project(proj_exprs)
-            .map_err(|e| PromqlError::Plan(format!("count cast projection error: {e}")))?;
+            .map_err(|e| PromqlError::Plan(format!("cast projection error: {e}")))?;
     }
 
     let plan = builder
         .build()
         .map_err(|e| PromqlError::Plan(format!("aggregate build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Plan topk/bottomk aggregation using window functions.
+///
+/// These preserve original labels (unlike sum/avg which collapse labels).
+/// Uses ROW_NUMBER() OVER (PARTITION BY timestamp, group_labels ORDER BY value DESC/ASC)
+/// then filters to keep only rows where row_number <= k.
+fn plan_topk_bottomk(
+    child_plan: LogicalPlan,
+    func: AggregateFunction,
+    k: i64,
+    grouping_labels: &[String],
+    all_label_cols: &[String],
+) -> Result<LogicalPlan> {
+    use datafusion::logical_expr::expr::WindowFunction;
+    use datafusion::logical_expr::{WindowFunctionDefinition, expr::WindowFunctionParams};
+
+    // Partition by timestamp + grouping labels
+    let mut partition_by: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        partition_by.push(col(label.as_str()));
+    }
+
+    // Order by value DESC for topk, ASC for bottomk
+    let asc = func == AggregateFunction::BottomK;
+    let order_by = vec![Sort {
+        expr: col("value"),
+        asc,
+        nulls_first: false,
+    }];
+
+    let row_num_expr = datafusion::logical_expr::Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(Arc::new(
+            datafusion::functions_window::row_number::RowNumber::new().into(),
+        )),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by,
+            order_by,
+            window_frame: WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(datafusion::common::ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        },
+    }))
+    .alias("__row_num");
+
+    // Add window function
+    let windowed = LogicalPlanBuilder::from(child_plan)
+        .window(vec![row_num_expr])
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk window error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk window build error: {e}")))?;
+
+    // Filter: __row_num <= k
+    let filtered = LogicalPlanBuilder::from(windowed)
+        .filter(col("__row_num").lt_eq(lit(k)))
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk filter error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk filter build error: {e}")))?;
+
+    // Project to drop __row_num, keeping timestamp + all original label columns + value
+    let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in all_label_cols {
+        proj_exprs.push(col(label.as_str()));
+    }
+    proj_exprs.push(col("value"));
+
+    let plan = LogicalPlanBuilder::from(filtered)
+        .project(proj_exprs)
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk project error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("topk/bottomk project build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Plan limitk aggregation: take K arbitrary series per group.
+fn plan_limitk(
+    child_plan: LogicalPlan,
+    k: i64,
+    grouping_labels: &[String],
+    all_label_cols: &[String],
+) -> Result<LogicalPlan> {
+    use datafusion::logical_expr::expr::WindowFunction;
+    use datafusion::logical_expr::{WindowFunctionDefinition, expr::WindowFunctionParams};
+
+    let mut partition_by: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        partition_by.push(col(label.as_str()));
+    }
+
+    let row_num_expr = datafusion::logical_expr::Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(Arc::new(
+            datafusion::functions_window::row_number::RowNumber::new().into(),
+        )),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by,
+            order_by: vec![],
+            window_frame: WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(datafusion::common::ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        },
+    }))
+    .alias("__row_num");
+
+    let windowed = LogicalPlanBuilder::from(child_plan)
+        .window(vec![row_num_expr])
+        .map_err(|e| PromqlError::Plan(format!("limitk window error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limitk window build error: {e}")))?;
+
+    let filtered = LogicalPlanBuilder::from(windowed)
+        .filter(col("__row_num").lt_eq(lit(k)))
+        .map_err(|e| PromqlError::Plan(format!("limitk filter error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limitk filter build error: {e}")))?;
+
+    let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in all_label_cols {
+        proj_exprs.push(col(label.as_str()));
+    }
+    proj_exprs.push(col("value"));
+
+    let plan = LogicalPlanBuilder::from(filtered)
+        .project(proj_exprs)
+        .map_err(|e| PromqlError::Plan(format!("limitk project error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limitk project build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Plan limit_ratio aggregation: sample a ratio of series per group.
+fn plan_limit_ratio(
+    child_plan: LogicalPlan,
+    ratio: f64,
+    grouping_labels: &[String],
+    all_label_cols: &[String],
+) -> Result<LogicalPlan> {
+    use datafusion::logical_expr::expr::WindowFunction;
+    use datafusion::logical_expr::{WindowFunctionDefinition, expr::WindowFunctionParams};
+
+    let mut partition_by: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        partition_by.push(col(label.as_str()));
+    }
+
+    // Add both ROW_NUMBER and COUNT window functions
+    let row_num_expr = datafusion::logical_expr::Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(Arc::new(
+            datafusion::functions_window::row_number::RowNumber::new().into(),
+        )),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by: partition_by.clone(),
+            order_by: vec![],
+            window_frame: WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(datafusion::common::ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            ),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        },
+    }))
+    .alias("__row_num");
+
+    let count_expr = datafusion::logical_expr::Expr::WindowFunction(Box::new(WindowFunction {
+        fun: WindowFunctionDefinition::AggregateUDF(Arc::new(
+            datafusion::functions_aggregate::count::Count::new().into(),
+        )),
+        params: WindowFunctionParams {
+            args: vec![col("value")],
+            partition_by,
+            order_by: vec![],
+            window_frame: WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(datafusion::common::ScalarValue::UInt64(None)),
+                WindowFrameBound::Following(datafusion::common::ScalarValue::UInt64(None)),
+            ),
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+        },
+    }))
+    .alias("__group_count");
+
+    let windowed = LogicalPlanBuilder::from(child_plan)
+        .window(vec![row_num_expr, count_expr])
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio window error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio window build error: {e}")))?;
+
+    // Filter: __row_num <= ceil(__group_count * ratio)
+    // Implement ceil(x) as: CASE WHEN x = CAST(x AS INT64) THEN x ELSE CAST(x AS INT64) + 1 END
+    // Simpler: cast row_num and group_count to float64 and compare.
+    // We use: __row_num <= CAST((__group_count * ratio + 0.9999999999) AS INT64)
+    // which effectively performs ceiling for practical purposes.
+    let raw_threshold = cast(col("__group_count"), DataType::Float64) * lit(ratio);
+    // ceil via: cast(x + 1.0 - epsilon) but simpler: just use (x - floor(x) > 0 ? floor(x)+1 : x)
+    // Easiest: cast to int64 rounds towards zero, so for positive: if fractional part > 0, add 1
+    // Use: CAST(group_count AS FLOAT64) * ratio, then compare row_num as float64
+    // Actually simplest: row_num (1-indexed) <= group_count * ratio means we keep at least 1
+    // when ratio > 0. For ceil: row_num <= floor(group_count * ratio) + 1 when fractional
+    // But let's just do: CAST(__row_num AS FLOAT64) <= CEIL(__group_count * ratio)
+    // Use ScalarFunction directly with the UDF:
+    let ceil_udf = datafusion::functions::math::ceil();
+    let threshold = datafusion::logical_expr::Expr::ScalarFunction(
+        datafusion::logical_expr::expr::ScalarFunction::new_udf(ceil_udf, vec![raw_threshold]),
+    );
+    let filtered = LogicalPlanBuilder::from(windowed)
+        .filter(cast(col("__row_num"), DataType::Float64).lt_eq(threshold))
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio filter error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio filter build error: {e}")))?;
+
+    let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in all_label_cols {
+        proj_exprs.push(col(label.as_str()));
+    }
+    proj_exprs.push(col("value"));
+
+    let plan = LogicalPlanBuilder::from(filtered)
+        .project(proj_exprs)
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio project error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("limit_ratio project build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Plan quantile aggregation using percentile_cont.
+fn plan_quantile(
+    child_plan: LogicalPlan,
+    q: f64,
+    grouping_labels: &[String],
+) -> Result<LogicalPlan> {
+    let mut group_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        group_exprs.push(col(label.as_str()));
+    }
+
+    let agg_expr = datafusion::functions_aggregate::percentile_cont::percentile_cont(
+        Sort {
+            expr: col("value"),
+            asc: true,
+            nulls_first: false,
+        },
+        lit(q),
+    )
+    .alias("value");
+
+    let plan = LogicalPlanBuilder::from(child_plan)
+        .aggregate(group_exprs, vec![agg_expr])
+        .map_err(|e| PromqlError::Plan(format!("quantile aggregate error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("quantile build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Plan count_values aggregation.
+///
+/// count_values("label_name", vector) groups by the value column (cast to string)
+/// and counts occurrences, with the value becoming a new label.
+fn plan_count_values(
+    child_plan: LogicalPlan,
+    label_name: &str,
+    grouping_labels: &[String],
+) -> Result<LogicalPlan> {
+    // Project to add a new column: cast value to string as the new label.
+    let schema_fields: Vec<String> = child_plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    let mut proj_exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
+    for field_name in &schema_fields {
+        proj_exprs.push(col(field_name.as_str()));
+    }
+    proj_exprs.push(cast(col("value"), DataType::Utf8).alias(label_name));
+
+    let projected = LogicalPlanBuilder::from(child_plan)
+        .project(proj_exprs)
+        .map_err(|e| PromqlError::Plan(format!("count_values project error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("count_values project build error: {e}")))?;
+
+    // Group by timestamp + grouping labels + new label column, count
+    let mut group_exprs: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        group_exprs.push(col(label.as_str()));
+    }
+    group_exprs.push(col(label_name));
+
+    let count_expr = datafusion::functions_aggregate::count::count(col(label_name)).alias("value");
+
+    let aggregated = LogicalPlanBuilder::from(projected)
+        .aggregate(group_exprs, vec![count_expr])
+        .map_err(|e| PromqlError::Plan(format!("count_values aggregate error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("count_values aggregate build error: {e}")))?;
+
+    // Cast count (Int64) to Float64
+    let mut final_proj: Vec<datafusion::logical_expr::Expr> = vec![col("timestamp")];
+    for label in grouping_labels {
+        final_proj.push(col(label.as_str()));
+    }
+    final_proj.push(col(label_name));
+    final_proj.push(cast(col("value"), DataType::Float64).alias("value"));
+
+    let plan = LogicalPlanBuilder::from(aggregated)
+        .project(final_proj)
+        .map_err(|e| PromqlError::Plan(format!("count_values cast error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("count_values build error: {e}")))?;
 
     Ok(plan)
 }
