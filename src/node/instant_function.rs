@@ -9,25 +9,38 @@ use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
 use crate::error::{PromqlError, Result};
-use crate::func::InstantFunction;
 
-/// Custom logical node for instant vector functions (e.g., `abs`, `ceil`, `floor`, `ln`).
+/// Custom logical node that applies a scalar UDF to the `value` column.
 ///
-/// Wraps a child instant vector plan and applies `func` to each sample value.
-/// The `__name__` label is dropped from the output, matching Prometheus semantics.
+/// Wraps a child plan and applies a DataFusion scalar expression (UDF) to
+/// each sample value. The `__name__` label is dropped from the output,
+/// matching Prometheus semantics for instant functions.
+///
+/// This node has no corresponding physical node. It must always be lowered
+/// to a projection by the `InstantFuncToProjection` optimizer rule.
 #[derive(Debug, Clone)]
-pub(crate) struct InstantFuncEval {
+pub(crate) struct InstantFunction {
     pub input: LogicalPlan,
-    pub func: InstantFunction,
+    /// The scalar expression to apply to the `value` column.
+    /// This should be a DataFusion expression that takes a column reference
+    /// as input (e.g. `abs(col("value"))`).
+    pub func_expr: datafusion::logical_expr::Expr,
+    /// Display name for the function (used for explain plans and equality).
+    pub func_name: String,
     pub output_schema: DFSchemaRef,
 }
 
-impl InstantFuncEval {
-    pub fn new(input: LogicalPlan, func: InstantFunction) -> Result<Self> {
+impl InstantFunction {
+    pub fn new(
+        input: LogicalPlan,
+        func_expr: datafusion::logical_expr::Expr,
+        func_name: String,
+    ) -> Result<Self> {
         let output_schema = compute_output_schema(&input)?;
         Ok(Self {
             input,
-            func,
+            func_expr,
+            func_name,
             output_schema,
         })
     }
@@ -49,9 +62,9 @@ fn compute_output_schema(input: &LogicalPlan) -> Result<DFSchemaRef> {
     Ok(Arc::new(df_schema))
 }
 
-impl UserDefinedLogicalNodeCore for InstantFuncEval {
+impl UserDefinedLogicalNodeCore for InstantFunction {
     fn name(&self) -> &str {
-        "InstantFuncEval"
+        "InstantFunction"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -67,7 +80,7 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantFuncEval: func={}", self.func)
+        write!(f, "InstantFunction: func={}", self.func_name)
     }
 
     fn with_exprs_and_inputs(
@@ -77,7 +90,8 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
     ) -> datafusion::common::Result<Self> {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
-            func: self.func,
+            func_expr: self.func_expr.clone(),
+            func_name: self.func_name.clone(),
             output_schema: Arc::clone(&self.output_schema),
         })
     }
@@ -89,27 +103,27 @@ impl UserDefinedLogicalNodeCore for InstantFuncEval {
     }
 }
 
-impl PartialEq for InstantFuncEval {
+impl PartialEq for InstantFunction {
     fn eq(&self, other: &Self) -> bool {
-        self.func == other.func
+        self.func_name == other.func_name
     }
 }
-impl Eq for InstantFuncEval {}
+impl Eq for InstantFunction {}
 
-impl Hash for InstantFuncEval {
+impl Hash for InstantFunction {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.func.hash(state);
+        self.func_name.hash(state);
     }
 }
 
-impl PartialOrd for InstantFuncEval {
+impl PartialOrd for InstantFunction {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for InstantFuncEval {
-    fn cmp(&self, _other: &Self) -> Ordering {
-        Ordering::Equal
+impl Ord for InstantFunction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.func_name.cmp(&other.func_name)
     }
 }

@@ -20,12 +20,12 @@ use datafusion::datasource::MemTable;
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
-    AggregateFunction, datetime_func_to_expr, is_time_function, lookup_aggregate_function,
-    lookup_datetime_function, lookup_instant_function, lookup_range_function, lookup_sort_function,
-    make_label_join_udf, make_label_replace_udf,
+    AggregateFunction, datetime_func_to_expr, instant_func_to_expr, is_time_function,
+    lookup_aggregate_function, lookup_datetime_function, lookup_instant_function,
+    lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
 use crate::node::{
-    BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
+    BinaryEval, InstantFunction, InstantVectorEval, MatchCardinality, RangeFunctionEval,
     RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
@@ -160,7 +160,8 @@ async fn plan_call(
         }
         let vector_arg = &call.args.args[0];
         let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
-        let node = InstantFuncEval::new(child_plan, func)?;
+        let func_expr = instant_func_to_expr(&func, col("value"));
+        let node = InstantFunction::new(child_plan, func_expr, func.to_string())?;
         return Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
         }));
@@ -859,7 +860,7 @@ fn plan_limit_ratio(
     // Actually simplest: row_num (1-indexed) <= group_count * ratio means we keep at least 1
     // when ratio > 0. For ceil: row_num <= floor(group_count * ratio) + 1 when fractional
     // But let's just do: CAST(__row_num AS FLOAT64) <= CEIL(__group_count * ratio)
-    // Use ScalarFunction directly with the UDF:
+    // Use InstantFunction directly with the UDF:
     let ceil_udf = datafusion::functions::math::ceil();
     let threshold = datafusion::logical_expr::Expr::ScalarFunction(
         datafusion::logical_expr::expr::ScalarFunction::new_udf(ceil_udf, vec![raw_threshold]),
