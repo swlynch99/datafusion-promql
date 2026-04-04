@@ -9,9 +9,9 @@ use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion::prelude::lit;
 
 /// Optimizer rule that lifts shared constant literal projections out of unions
-/// and past sort nodes.
+/// and past sort nodes, and flattens nested projections.
 ///
-/// This rule handles two local patterns. DataFusion's bottom-up application
+/// This rule handles three local patterns. DataFusion's bottom-up application
 /// composes them to handle deeper trees automatically.
 ///
 /// **Pattern 1 – Union with projection branches:**
@@ -29,6 +29,14 @@ use datafusion::prelude::lit;
 /// Sort [key]                     Projection [constants + col refs]
 ///   Projection [cols + consts]     Sort [key]
 ///                            →       Projection [cols only]
+/// ```
+///
+/// **Pattern 3 – Nested projections:**
+///
+/// ```text
+/// Projection [outer_exprs]       Projection [resolved_exprs]
+///   Projection [inner_exprs]  →    child
+///     child
 /// ```
 ///
 /// Together, a tree like `Sort -> Union -> [Sort -> Proj, Sort -> Proj]` is
@@ -54,6 +62,7 @@ impl OptimizerRule for LiftConstantProjections {
         match &plan {
             LogicalPlan::Union(_) => rewrite_union(plan),
             LogicalPlan::Sort(_) => rewrite_sort(plan),
+            LogicalPlan::Projection(_) => rewrite_nested_projection(plan),
             _ => Ok(Transformed::no(plan)),
         }
     }
@@ -196,6 +205,110 @@ fn rewrite_sort(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
 
     let result = build_outer_projection(new_sort, &constant_cols)?;
     Ok(Transformed::yes(result))
+}
+
+/// Pattern 3: Flatten a Projection whose input is also a Projection by
+/// inlining the inner expressions into the outer ones.
+fn rewrite_nested_projection(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::Projection(ref outer) = plan else {
+        unreachable!();
+    };
+
+    let LogicalPlan::Projection(ref inner) = *outer.input else {
+        return Ok(Transformed::no(plan));
+    };
+
+    // Build a map from inner output column names to their expressions.
+    let inner_expr_map: std::collections::HashMap<&str, &Expr> = inner
+        .expr
+        .iter()
+        .map(|e| {
+            let name = expr_output_name(e);
+            (name, e)
+        })
+        .collect();
+
+    // Resolve each outer expression by replacing column references with inner
+    // expressions.
+    let mut resolved_exprs = Vec::with_capacity(outer.expr.len());
+    for outer_expr in &outer.expr {
+        match inline_column_refs(outer_expr, &inner_expr_map) {
+            Some(resolved) => resolved_exprs.push(resolved),
+            None => return Ok(Transformed::no(plan)),
+        }
+    }
+
+    let LogicalPlan::Projection(outer) = plan else {
+        unreachable!();
+    };
+    let LogicalPlan::Projection(inner) = Arc::unwrap_or_clone(outer.input) else {
+        unreachable!();
+    };
+
+    let result = LogicalPlanBuilder::from(Arc::unwrap_or_clone(inner.input))
+        .project(resolved_exprs)?
+        .build()?;
+    Ok(Transformed::yes(result))
+}
+
+/// Get the output column name of an expression.
+fn expr_output_name(expr: &Expr) -> &str {
+    match expr {
+        Expr::Alias(alias) => &alias.name,
+        Expr::Column(col) => &col.name,
+        _ => "",
+    }
+}
+
+/// Recursively replace column references in `expr` with the corresponding
+/// expressions from `inner_map`. Returns `None` if a column reference cannot
+/// be resolved (indicating we should bail out of the optimization).
+fn inline_column_refs(
+    expr: &Expr,
+    inner_map: &std::collections::HashMap<&str, &Expr>,
+) -> Option<Expr> {
+    match expr {
+        Expr::Column(col) => {
+            let inner_expr = inner_map.get(col.name.as_str())?;
+            // Strip the inner alias and re-alias to preserve the expected
+            // column name (the outer column reference's name).
+            Some(strip_alias(inner_expr).alias(col.name.as_str()))
+        }
+        Expr::Alias(alias) => {
+            let resolved_inner = inline_column_refs(&alias.expr, inner_map)?;
+            Some(strip_alias(&resolved_inner).alias(&alias.name))
+        }
+        Expr::Literal(_, _) => Some(expr.clone()),
+        // For any other expression type, attempt to resolve all sub-expressions.
+        other => {
+            let mut resolved = other.clone();
+            let mut failed = false;
+            resolved = resolved
+                .transform(|e| {
+                    if failed {
+                        return Ok(Transformed::no(e));
+                    }
+                    if let Expr::Column(col) = &e {
+                        if let Some(inner_expr) = inner_map.get(col.name.as_str()) {
+                            return Ok(Transformed::yes(strip_alias(inner_expr)));
+                        }
+                        failed = true;
+                    }
+                    Ok(Transformed::no(e))
+                })
+                .ok()?
+                .data;
+            if failed { None } else { Some(resolved) }
+        }
+    }
+}
+
+/// Strip the top-level alias from an expression, if present.
+fn strip_alias(expr: &Expr) -> Expr {
+    match expr {
+        Expr::Alias(alias) => alias.expr.as_ref().clone(),
+        other => other.clone(),
+    }
 }
 
 /// Build an outer projection that reassembles the original column order:

@@ -629,6 +629,263 @@ fn test_composed_union_of_sorted_projections() {
     assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
 }
 
+// ─── Nested projection flattening tests ────────────────────────────────────
+
+/// Basic: Projection over Projection should be flattened into one.
+#[test]
+fn test_nested_projection_flattened() {
+    let scan = make_scan("t0");
+    let inner = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+    let plan = LogicalPlanBuilder::from(inner)
+        .project(vec![
+            col("timestamp").alias("timestamp"),
+            col("value").alias("value"),
+            col("__name__").alias("metric"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "nested projection should be flattened");
+
+    // Should be a single Projection over a Scan.
+    let LogicalPlan::Projection(proj) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(proj.expr.len(), 3);
+
+    // The inner input should NOT be a projection anymore.
+    assert!(
+        !matches!(proj.input.as_ref(), LogicalPlan::Projection(_)),
+        "inner projection should have been eliminated"
+    );
+
+    // The constant __name__ should be inlined as a literal renamed to "metric".
+    assert!(
+        is_literal_alias(&proj.expr[2], "cpu", "metric"),
+        "expected lit('cpu') AS metric, got: {:?}",
+        proj.expr[2]
+    );
+}
+
+/// Chained rename: Projection [B -> C] over Projection [A -> B] should
+/// resolve to a single Projection [A -> C].
+#[test]
+fn test_nested_projection_chained_rename() {
+    let scan = make_scan("t0");
+    let inner = LogicalPlanBuilder::from(scan)
+        .project(vec![col("ts").alias("b"), col("val").alias("value")])
+        .unwrap()
+        .build()
+        .unwrap();
+    let plan = LogicalPlanBuilder::from(inner)
+        .project(vec![col("b").alias("c"), col("value").alias("value")])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "chained rename should be flattened");
+
+    let LogicalPlan::Projection(proj) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(proj.expr.len(), 2);
+
+    // Should NOT be a nested projection.
+    assert!(
+        !matches!(proj.input.as_ref(), LogicalPlan::Projection(_)),
+        "inner projection should have been eliminated"
+    );
+
+    // The output schema should have columns "c" and "value".
+    let field_names: Vec<&str> = result
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect();
+    assert_eq!(field_names, vec!["c", "value"]);
+}
+
+/// Nested projection where outer adds a new literal should flatten correctly.
+#[test]
+fn test_nested_projection_outer_adds_literal() {
+    let scan = make_scan("t0");
+    let inner = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+    let plan = LogicalPlanBuilder::from(inner)
+        .project(vec![
+            col("timestamp").alias("timestamp"),
+            col("value").alias("value"),
+            lit("extra").alias("tag"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let LogicalPlan::Projection(proj) = &result else {
+        panic!("expected Projection at top");
+    };
+    assert_eq!(proj.expr.len(), 3);
+    assert!(is_literal_alias(&proj.expr[2], "extra", "tag"));
+    assert!(!matches!(proj.input.as_ref(), LogicalPlan::Projection(_)));
+}
+
+/// A bare Projection (not nested) should NOT be transformed.
+#[test]
+fn test_single_projection_unchanged() {
+    let scan = make_scan("t0");
+    let plan = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let (_result, transformed) = apply_rule(plan);
+    assert!(!transformed, "single projection should not be changed");
+}
+
+/// Output schema should be preserved after flattening.
+#[test]
+fn test_nested_projection_schema_preserved() {
+    let scan = make_scan("t0");
+    let inner = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+    let plan = LogicalPlanBuilder::from(inner)
+        .project(vec![
+            col("__name__").alias("metric"),
+            col("timestamp").alias("ts"),
+            col("value").alias("v"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let original_field_names: Vec<String> = plan
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let result_field_names: Vec<String> = result
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+
+    assert_eq!(original_field_names, result_field_names);
+}
+
+/// Flattening composes with lift: Union creates nested projections that get
+/// flattened in a subsequent pass.
+#[test]
+fn test_flatten_after_lift_union() {
+    // Build: Projection -> Union -> [Projection, Projection]
+    // The lift_constant rule produces:
+    //   Projection(constants) -> Union -> [Projection(stripped), Projection(stripped)]
+    // If the inner union branches already had projections, we get nested projections
+    // in the branches that should be flattened.
+
+    let scan0 = make_scan("t0");
+    let inner0 = LogicalPlanBuilder::from(scan0)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+    let branch0 = LogicalPlanBuilder::from(inner0)
+        .project(vec![
+            col("timestamp").alias("timestamp"),
+            col("value").alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let scan1 = make_scan("t1");
+    let inner1 = LogicalPlanBuilder::from(scan1)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+    let branch1 = LogicalPlanBuilder::from(inner1)
+        .project(vec![
+            col("timestamp").alias("timestamp"),
+            col("value").alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = LogicalPlan::Union(
+        Union::try_new_with_loose_types(vec![Arc::new(branch0), Arc::new(branch1)]).unwrap(),
+    );
+
+    let (result, transformed) = apply_rule_to_fixpoint(plan);
+    assert!(transformed);
+
+    // After fixpoint: outer Projection (with __name__ constant) -> Union -> [single Proj, single Proj]
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // Each union branch should be a single (flattened) projection, not nested.
+    let LogicalPlan::Union(inner_union) = outer.input.as_ref() else {
+        panic!("expected Union under outer projection");
+    };
+    for input in &inner_union.inputs {
+        let LogicalPlan::Projection(branch_proj) = input.as_ref() else {
+            panic!("expected Projection in union branch, got:\n{input}");
+        };
+        assert!(
+            !matches!(branch_proj.input.as_ref(), LogicalPlan::Projection(_)),
+            "union branch should have flattened nested projection"
+        );
+    }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /// Check if an expression is `lit(expected_value).alias(expected_name)`.
