@@ -2,13 +2,20 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, cast, col};
 use promql_parser::parser::{self, Expr, LabelModifier};
+
+use arrow::array::{Float64Array, Int64Array};
+use arrow::datatypes::Field;
+use arrow::record_batch::RecordBatch;
+use datafusion::datasource::MemTable;
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
-    AggregateFunction, lookup_aggregate_function, lookup_instant_function, lookup_range_function,
+    AggregateFunction, datetime_func_to_expr, is_time_function, lookup_aggregate_function,
+    lookup_datetime_function, lookup_instant_function, lookup_range_function,
 };
 use crate::node::{
     BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
@@ -183,6 +190,19 @@ async fn plan_call(
         return Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(func_node),
         }));
+    }
+
+    // Check if this is the time() function (no arguments, returns eval timestamp).
+    if is_time_function(func_name) {
+        if !call.args.args.is_empty() {
+            return Err(PromqlError::Plan("time() takes no arguments".into()));
+        }
+        return plan_time_function(params);
+    }
+
+    // Check if this is a datetime function (timestamp, day_of_month, etc.).
+    if let Some(dt_func) = lookup_datetime_function(func_name) {
+        return plan_datetime_function(dt_func, call, source, time_range, params).await;
     }
 
     Err(PromqlError::NotImplemented(format!(
@@ -397,4 +417,128 @@ async fn plan_unary(
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(node),
     }))
+}
+
+/// Plan the `time()` function: returns evaluation timestamps as float64 seconds.
+///
+/// Generates a synthetic series with no labels, where each row has:
+/// - `timestamp` = step timestamp (ns)
+/// - `value` = step timestamp in seconds (float64)
+fn plan_time_function(params: EvalParams) -> Result<LogicalPlan> {
+    use crate::func::DateTimeFunction;
+    plan_synthetic_datetime(DateTimeFunction::Timestamp, params)
+}
+
+/// Plan a datetime function.
+///
+/// When called with a vector argument, applies the function to each sample's timestamp.
+/// When called without arguments, generates a synthetic series using eval timestamps.
+async fn plan_datetime_function(
+    dt_func: crate::func::DateTimeFunction,
+    call: &parser::Call,
+    source: &dyn MetricSource,
+    time_range: TimeRange,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    if call.args.args.is_empty() {
+        // No arguments: apply function to evaluation timestamps.
+        return plan_synthetic_datetime(dt_func, params);
+    }
+
+    // Has a vector argument: plan the child, then project timestamp → value.
+    let vector_arg = &call.args.args[0];
+    let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+
+    // Build a projection that replaces `value` with dt_func(timestamp)
+    // and drops __name__ (since datetime functions change the meaning of the value).
+    let child_schema = child_plan.schema();
+    let mut exprs: Vec<datafusion::logical_expr::Expr> = Vec::new();
+
+    for field in child_schema.fields() {
+        let name = field.name();
+        if name == "__name__" {
+            continue;
+        }
+        let (qualifier, child_field) = child_schema
+            .qualified_field_with_name(None, name.as_str())
+            .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+        let col_expr = datafusion::logical_expr::Expr::Column(datafusion::common::Column::from((
+            qualifier,
+            child_field,
+        )));
+
+        if name == "value" {
+            // Replace value with the datetime function applied to the timestamp column.
+            let (ts_qualifier, ts_field) = child_schema
+                .qualified_field_with_name(None, "timestamp")
+                .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+            let ts_expr = datafusion::logical_expr::Expr::Column(datafusion::common::Column::from(
+                (ts_qualifier, ts_field),
+            ));
+            exprs.push(datetime_func_to_expr(dt_func, ts_expr));
+        } else {
+            exprs.push(col_expr.alias(name.as_str()));
+        }
+    }
+
+    let plan = LogicalPlanBuilder::from(child_plan)
+        .project(exprs)
+        .map_err(|e| PromqlError::Plan(format!("datetime projection error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("datetime build error: {e}")))?;
+
+    Ok(plan)
+}
+
+/// Generate a synthetic series for no-argument datetime functions (and `time()`).
+///
+/// Creates a MemTable with one row per step timestamp, then applies the datetime
+/// function to compute the value.
+fn plan_synthetic_datetime(
+    dt_func: crate::func::DateTimeFunction,
+    params: EvalParams,
+) -> Result<LogicalPlan> {
+    // Generate step timestamps.
+    let timestamps: Vec<i64> = if let Some(ts) = params.eval_ts_ns {
+        vec![ts]
+    } else {
+        let mut ts_vec = Vec::new();
+        let mut t = params.start_ns;
+        while t <= params.end_ns {
+            ts_vec.push(t);
+            t += params.step_ns;
+        }
+        ts_vec
+    };
+
+    // Compute values by applying the datetime function to each timestamp.
+    let values: Vec<f64> = timestamps
+        .iter()
+        .map(|&ts| dt_func.evaluate_ns(ts))
+        .collect();
+    let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+        Field::new("timestamp", DataType::Int64, false),
+        Field::new("value", DataType::Float64, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from(timestamps)),
+            Arc::new(Float64Array::from(values)),
+        ],
+    )
+    .map_err(|e| PromqlError::Plan(format!("failed to create time() batch: {e}")))?;
+
+    let mem_table = MemTable::try_new(Arc::clone(&schema), vec![vec![batch]])
+        .map_err(|e| PromqlError::Plan(format!("failed to create time() table: {e}")))?;
+
+    let table_source =
+        provider_as_source(Arc::new(mem_table) as Arc<dyn datafusion::catalog::TableProvider>);
+    let plan = LogicalPlanBuilder::scan("time_series", table_source, None)
+        .map_err(|e| PromqlError::Plan(format!("time() scan error: {e}")))?
+        .build()
+        .map_err(|e| PromqlError::Plan(format!("time() build error: {e}")))?;
+
+    Ok(plan)
 }
