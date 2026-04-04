@@ -178,18 +178,14 @@ pub(crate) async fn plan_vector_selector(
 
     // Apply time range filter on the expanded range (skip if unbounded).
     let plan = if let Some(start) = expanded_range.start_ns {
-        plan.filter(
-            col("timestamp").gt_eq(timestamp_lit(&provider_schema, start)),
-        )
-        .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+        plan.filter(col("timestamp").gt_eq(timestamp_lit(&provider_schema, start)))
+            .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
     } else {
         plan
     };
     let plan = if let Some(end) = expanded_range.end_ns {
-        plan.filter(
-            col("timestamp").lt_eq(timestamp_lit(&provider_schema, end)),
-        )
-        .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
+        plan.filter(col("timestamp").lt_eq(timestamp_lit(&provider_schema, end)))
+            .map_err(|e| PromqlError::Plan(format!("failed to apply time filter: {e}")))?
     } else {
         plan
     };
