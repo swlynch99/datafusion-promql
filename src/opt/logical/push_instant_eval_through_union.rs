@@ -110,10 +110,7 @@ impl OptimizerRule for PushInstantEvalThroughUnion {
 /// Returns `true` if every branch is a `Projection` that assigns constant
 /// literal values to at least one label column, and the tuple of those constant
 /// values is unique across all branches.
-fn branches_have_disjoint_labels(
-    inputs: &[Arc<LogicalPlan>],
-    label_columns: &[String],
-) -> bool {
+fn branches_have_disjoint_labels(inputs: &[Arc<LogicalPlan>], label_columns: &[String]) -> bool {
     if label_columns.is_empty() {
         return false;
     }

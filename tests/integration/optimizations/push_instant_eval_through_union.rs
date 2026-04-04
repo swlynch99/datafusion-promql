@@ -51,7 +51,7 @@ fn make_union(branches: Vec<Vec<Expr>>) -> LogicalPlan {
 fn wrap_instant_eval(input: LogicalPlan, label_columns: Vec<String>) -> LogicalPlan {
     let eval = InstantVectorEval::new(
         input,
-        1_000_000_000, // 1s in ns
+        1_000_000_000,   // 1s in ns
         300_000_000_000, // 5min lookback
         0,
         label_columns,
@@ -108,10 +108,7 @@ fn test_push_down_disjoint_branches() {
         ],
     ]);
 
-    let plan = wrap_instant_eval(
-        union,
-        vec!["__name__".to_string(), "instance".to_string()],
-    );
+    let plan = wrap_instant_eval(union, vec!["__name__".to_string(), "instance".to_string()]);
 
     let (result, transformed) = apply_rule(plan);
     assert!(transformed, "rule should have rewritten the plan");
@@ -187,7 +184,10 @@ fn test_no_push_down_identical_labels() {
 
     let plan = wrap_instant_eval(union, vec!["__name__".to_string()]);
     let (_, transformed) = apply_rule(plan);
-    assert!(!transformed, "identical labels should not trigger push down");
+    assert!(
+        !transformed,
+        "identical labels should not trigger push down"
+    );
 }
 
 /// When branches have some shared constants but at least one column differs,
@@ -210,10 +210,7 @@ fn test_push_down_shared_plus_different() {
         ],
     ]);
 
-    let plan = wrap_instant_eval(
-        union,
-        vec!["__name__".to_string(), "instance".to_string()],
-    );
+    let plan = wrap_instant_eval(union, vec!["__name__".to_string(), "instance".to_string()]);
     let (_, transformed) = apply_rule(plan);
     assert!(
         transformed,
@@ -257,14 +254,8 @@ fn test_no_push_down_non_projection_branches() {
 #[test]
 fn test_no_push_down_no_constant_labels() {
     let union = make_union(vec![
-        vec![
-            col("ts").alias("timestamp"),
-            col("val").alias("value"),
-        ],
-        vec![
-            col("ts").alias("timestamp"),
-            col("val").alias("value"),
-        ],
+        vec![col("ts").alias("timestamp"), col("val").alias("value")],
+        vec![col("ts").alias("timestamp"), col("val").alias("value")],
     ]);
 
     let plan = wrap_instant_eval(union, vec!["__name__".to_string()]);
