@@ -3,9 +3,9 @@ use std::sync::Arc;
 use chrono::{DateTime, TimeZone, Utc};
 use clap::Parser;
 
+use datafusion_promql::PromqlEngine;
 use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::QueryResult;
-use datafusion_promql::PromqlEngine;
 
 use plotters::prelude::*;
 
@@ -120,7 +120,11 @@ fn plot_matrix(
 
     // Add a little vertical padding.
     let val_range = val_max - val_min;
-    let padding = if val_range == 0.0 { 1.0 } else { val_range * 0.05 };
+    let padding = if val_range == 0.0 {
+        1.0
+    } else {
+        val_range * 0.05
+    };
     val_min -= padding;
     val_max += padding;
 
@@ -156,7 +160,9 @@ fn plot_matrix(
         chart
             .draw_series(LineSeries::new(points.clone(), color.stroke_width(2)))?
             .label(&label)
-            .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2)));
+            .legend(move |(x, y)| {
+                PathElement::new(vec![(x, y), (x + 20, y)], color.stroke_width(2))
+            });
     }
 
     if series.len() > 1 {
@@ -212,22 +218,15 @@ fn plot_vector(
 
     chart
         .configure_mesh()
-        .x_label_formatter(&|idx| {
-            labels.get(*idx).cloned().unwrap_or_default()
-        })
+        .x_label_formatter(&|idx| labels.get(*idx).cloned().unwrap_or_default())
         .x_labels(n.min(20))
         .y_desc("Value")
         .draw()?;
 
-    chart.draw_series(
-        values
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| {
-                let color = series_color(i);
-                Rectangle::new([(i, 0.0f64.max(y_min)), (i + 1, v)], color.filled())
-            }),
-    )?;
+    chart.draw_series(values.iter().enumerate().map(|(i, &v)| {
+        let color = series_color(i);
+        Rectangle::new([(i, 0.0f64.max(y_min)), (i + 1, v)], color.filled())
+    }))?;
 
     root.present()?;
     Ok(())
