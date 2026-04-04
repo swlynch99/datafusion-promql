@@ -138,8 +138,8 @@ impl OptimizerRule for LiftConstantProjections {
         let mut outer_exprs: Vec<Expr> = Vec::with_capacity(ncols);
         let mut union_col_idx = 0;
 
-        for col_idx in 0..ncols {
-            if let Some((ref value, ref name)) = constant_cols[col_idx] {
+        for constant_col in &constant_cols {
+            if let Some((value, name)) = constant_col {
                 outer_exprs.push(lit(value.clone()).alias(name.as_str()));
             } else {
                 let (qualifier, field) = union_schema.qualified_field(union_col_idx);
