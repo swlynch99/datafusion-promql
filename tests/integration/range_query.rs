@@ -46,7 +46,7 @@ impl MetricSource for InMemoryMetricSource {
 
 /// Create a counter metric source: `http_requests_total` with two series,
 /// monotonically increasing at 10/s and 20/s respectively.
-/// Samples every 1 second from t=0 to t=10000ms.
+/// Samples every 1 second from t=0 to t=10s.
 fn make_counter_source() -> InMemoryMetricSource {
     let schema = Arc::new(Schema::new(vec![
         Field::new("__name__", DataType::Utf8, false),
@@ -66,7 +66,7 @@ fn make_counter_source() -> InMemoryMetricSource {
     // Series 1: instance=host1, rate = 10 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push((i as f64) * 10.0); // 0, 10, 20, 30, ...
         instances.push("host1");
         jobs.push("webserver");
@@ -75,7 +75,7 @@ fn make_counter_source() -> InMemoryMetricSource {
     // Series 2: instance=host2, rate = 20 req/s
     for i in 0..n {
         names.push("http_requests_total");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push((i as f64) * 20.0); // 0, 20, 40, 60, ...
         instances.push("host2");
         jobs.push("webserver");
@@ -118,7 +118,7 @@ fn make_gauge_source() -> InMemoryMetricSource {
 
     for (i, &v) in gauge_values.iter().enumerate() {
         names.push("temperature");
-        timestamps.push((i as i64) * 1000);
+        timestamps.push((i as i64) * 1_000_000_000);
         values.push(v);
         sensors.push("room1");
     }
@@ -144,8 +144,8 @@ async fn test_instant_query_rate() {
     let source = make_counter_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // rate(http_requests_total[5s]) at t=10000
-    // Window for host1: [5000..10000] -> samples at 5s,6s,7s,8s,9s,10s
+    // rate(http_requests_total[5s]) at t=10s
+    // Window for host1: [5s..10s] -> samples at 5s,6s,7s,8s,9s,10s
     // Values: 50,60,70,80,90,100 -> increase=50 over 5s -> rate=10/s
     let ts = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
     let result = engine
@@ -186,9 +186,9 @@ async fn test_range_query_rate() {
     let source = make_counter_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // rate(http_requests_total[5s]) over [5000, 10000] step 5s
-    // At t=5000: window [0,5000], samples at 0s..5s, host1: (0->50)/5=10, host2: (0->100)/5=20
-    // At t=10000: window [5000,10000], samples at 5s..10s, host1: (50->100)/5=10, host2: (100->200)/5=20
+    // rate(http_requests_total[5s]) over [5s, 10s] step 5s
+    // At t=5s: window [0,5s], samples at 0s..5s, host1: (0->50)/5=10, host2: (0->100)/5=20
+    // At t=10s: window [5s,10s], samples at 5s..10s, host1: (50->100)/5=10, host2: (100->200)/5=20
     let start = chrono::Utc.timestamp_millis_opt(5000).unwrap();
     let end = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
     let step = Duration::from_secs(5);
@@ -235,9 +235,9 @@ async fn test_instant_query_irate() {
     let source = make_counter_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // irate(http_requests_total[5s]) at t=10000
-    // Uses last two samples: (9000, 90) and (10000, 100) for host1
-    // irate = (100-90)/(10000-9000)*1000 = 10/1 = 10.0
+    // irate(http_requests_total[5s]) at t=10s
+    // Uses last two samples: (9s, 90) and (10s, 100) for host1
+    // irate = (100-90)/(1s) = 10.0
     let ts = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
     let result = engine
         .instant_query("irate(http_requests_total[5s])", ts)
@@ -275,9 +275,9 @@ async fn test_range_query_increase() {
     let source = make_counter_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // increase(http_requests_total[5s]) over [5000, 10000] step 5s
-    // At t=5000: window [0,5000], host1 increase = 50-0 = 50
-    // At t=10000: window [5000,10000], host1 increase = 100-50 = 50
+    // increase(http_requests_total[5s]) over [5s, 10s] step 5s
+    // At t=5s: window [0,5s], host1 increase = 50-0 = 50
+    // At t=10s: window [5s,10s], host1 increase = 100-50 = 50
     let start = chrono::Utc.timestamp_millis_opt(5000).unwrap();
     let end = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
     let step = Duration::from_secs(5);
@@ -322,8 +322,8 @@ async fn test_range_query_delta() {
     let source = make_gauge_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // delta(temperature[3s]) at t=3000
-    // Window [0, 3000]: samples at 0,1,2,3s -> values 20,22,25,23
+    // delta(temperature[3s]) at t=3s
+    // Window [0, 3s]: samples at 0,1,2,3s -> values 20,22,25,23
     // delta = 23 - 20 = 3.0
     let ts = chrono::Utc.timestamp_millis_opt(3000).unwrap();
     let result = engine
@@ -349,9 +349,9 @@ async fn test_range_query_delta_over_range() {
     let source = make_gauge_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // delta(temperature[3s]) over [3000, 6000] step 3s
-    // At t=3000: window [0,3000] -> 20,22,25,23 -> delta = 3.0
-    // At t=6000: window [3000,6000] -> 23,21,24,26 -> delta = 3.0
+    // delta(temperature[3s]) over [3s, 6s] step 3s
+    // At t=3s: window [0,3s] -> 20,22,25,23 -> delta = 3.0
+    // At t=6s: window [3s,6s] -> 23,21,24,26 -> delta = 3.0
     let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
     let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
     let step = Duration::from_secs(3);
@@ -366,16 +366,16 @@ async fn test_range_query_delta_over_range() {
             assert_eq!(series.len(), 1, "expected 1 series");
             assert_eq!(series[0].samples.len(), 2, "expected 2 steps");
 
-            // t=3000: delta(20..23) = 3.0
+            // t=3s: delta(20..23) = 3.0
             assert!(
                 (series[0].samples[0].1 - 3.0).abs() < f64::EPSILON,
-                "expected delta 3.0 at t=3000, got {}",
+                "expected delta 3.0 at t=3s, got {}",
                 series[0].samples[0].1
             );
-            // t=6000: delta(23..26) = 3.0
+            // t=6s: delta(23..26) = 3.0
             assert!(
                 (series[0].samples[1].1 - 3.0).abs() < f64::EPSILON,
-                "expected delta 3.0 at t=6000, got {}",
+                "expected delta 3.0 at t=6s, got {}",
                 series[0].samples[1].1
             );
         }
@@ -390,7 +390,7 @@ async fn test_range_query_plain_selector() {
     let source = make_counter_source();
     let engine = PromqlEngine::new(Arc::new(source));
 
-    // Plain selector `http_requests_total` as range query over [0, 4000] step 2s
+    // Plain selector `http_requests_total` as range query over [0, 4s] step 2s
     // Should return aligned samples at each step for each series.
     let start = chrono::Utc.timestamp_millis_opt(0).unwrap();
     let end = chrono::Utc.timestamp_millis_opt(4000).unwrap();
@@ -407,14 +407,14 @@ async fn test_range_query_plain_selector() {
             let mut series = series;
             series.sort_by(|a, b| a.labels.get("instance").cmp(&b.labels.get("instance")));
 
-            // host1: steps at 0, 2000, 4000 -> values 0, 20, 40
+            // host1: steps at 0, 2s, 4s -> values 0, 20, 40
             assert_eq!(series[0].labels.get("instance").unwrap(), "host1");
             assert_eq!(series[0].samples.len(), 3, "expected 3 steps for host1");
             assert!((series[0].samples[0].1 - 0.0).abs() < f64::EPSILON);
             assert!((series[0].samples[1].1 - 20.0).abs() < f64::EPSILON);
             assert!((series[0].samples[2].1 - 40.0).abs() < f64::EPSILON);
 
-            // host2: steps at 0, 2000, 4000 -> values 0, 40, 80
+            // host2: steps at 0, 2s, 4s -> values 0, 40, 80
             assert_eq!(series[1].labels.get("instance").unwrap(), "host2");
             assert_eq!(series[1].samples.len(), 3, "expected 3 steps for host2");
             assert!((series[1].samples[0].1 - 0.0).abs() < f64::EPSILON);
@@ -448,7 +448,7 @@ async fn test_rate_with_counter_reset() {
                 "resets_total",
                 "resets_total",
             ])),
-            Arc::new(Int64Array::from(vec![0, 1000, 2000, 3000, 4000])),
+            Arc::new(Int64Array::from(vec![0, 1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000])),
             Arc::new(Float64Array::from(vec![0.0, 10.0, 20.0, 5.0, 15.0])),
             Arc::new(StringArray::from(vec![
                 "host1", "host1", "host1", "host1", "host1",

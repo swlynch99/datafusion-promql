@@ -11,19 +11,19 @@ use crate::node::{
     AggregateEval, BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality,
     RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
 };
-use crate::types::{DEFAULT_LOOKBACK_MS, TimeRange};
+use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
 use super::selector::plan_vector_selector;
 
 /// Parameters controlling how evaluation timestamps are generated.
 #[derive(Debug, Clone, Copy)]
 pub struct EvalParams {
-    /// For instant queries: the single evaluation timestamp (ms).
+    /// For instant queries: the single evaluation timestamp (ns).
     /// `None` for range queries (timestamps generated from start/end/step).
-    pub eval_ts_ms: Option<i64>,
-    pub start_ms: i64,
-    pub end_ms: i64,
-    pub step_ms: i64,
+    pub eval_ts_ns: Option<i64>,
+    pub start_ns: i64,
+    pub end_ns: i64,
+    pub step_ns: i64,
 }
 
 /// Extract label column names from a schema (everything except timestamp/value).
@@ -48,15 +48,15 @@ pub async fn plan_expr(
             let (child_plan, label_columns) =
                 plan_vector_selector(vs, source, time_range, 0).await?;
 
-            let node = if let Some(ts) = params.eval_ts_ms {
-                InstantVectorEval::instant(child_plan, ts, DEFAULT_LOOKBACK_MS, label_columns)
+            let node = if let Some(ts) = params.eval_ts_ns {
+                InstantVectorEval::instant(child_plan, ts, DEFAULT_LOOKBACK_NS, label_columns)
             } else {
                 InstantVectorEval::range(
                     child_plan,
-                    params.start_ms,
-                    params.end_ms,
-                    params.step_ms,
-                    DEFAULT_LOOKBACK_MS,
+                    params.start_ns,
+                    params.end_ns,
+                    params.step_ns,
+                    DEFAULT_LOOKBACK_NS,
                     label_columns,
                 )
             };
@@ -151,22 +151,22 @@ async fn plan_call(
             }
         };
 
-        let range_ms = matrix.range.as_millis() as i64;
+        let range_ns = matrix.range.as_nanos() as i64;
 
         // Plan the inner vector selector with extra range expansion.
         let (child_plan, label_columns) =
-            plan_vector_selector(&matrix.vs, source, time_range, range_ms).await?;
+            plan_vector_selector(&matrix.vs, source, time_range, range_ns).await?;
 
         // Wrap in RangeVectorEval node.
-        let node = if let Some(ts) = params.eval_ts_ms {
-            RangeVectorEval::instant(child_plan, ts, range_ms, range_func, label_columns)
+        let node = if let Some(ts) = params.eval_ts_ns {
+            RangeVectorEval::instant(child_plan, ts, range_ns, range_func, label_columns)
         } else {
             RangeVectorEval::range(
                 child_plan,
-                params.start_ms,
-                params.end_ms,
-                params.step_ms,
-                range_ms,
+                params.start_ns,
+                params.end_ns,
+                params.step_ns,
+                range_ns,
                 range_func,
                 label_columns,
             )

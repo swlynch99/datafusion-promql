@@ -84,7 +84,7 @@ fn find_matching_columns(
 /// Each matched column produces one branch:
 /// ```sql
 /// SELECT
-///     CAST(ts AS BIGINT) / 1000000 AS timestamp,
+///     CAST(ts AS BIGINT) AS timestamp,
 ///     CAST(<col> AS DOUBLE)        AS value,
 ///     '<metric>'                   AS __name__,
 ///     '<label_val>'                AS <label_key>, ...
@@ -112,9 +112,8 @@ pub(crate) fn normalize_wide_to_long(
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
     for (idx, mc) in matched.iter().enumerate() {
         let mut exprs = vec![
-            // Timestamp: cast to Int64 then divide to get milliseconds.
-            (cast(col(mapping.timestamp_column.as_str()), DataType::Int64) / lit(1_000_000i64))
-                .alias("timestamp"),
+            // Timestamp: cast to Int64 (nanoseconds).
+            cast(col(mapping.timestamp_column.as_str()), DataType::Int64).alias("timestamp"),
             // Value: cast to Float64.
             // Use Column::new_unqualified to bypass the SQL parser, which would
             // strip anything after `/` from the column name.

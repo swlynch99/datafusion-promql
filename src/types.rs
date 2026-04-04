@@ -6,14 +6,14 @@ pub type Labels = BTreeMap<String, String>;
 /// The special label name used for the metric name in Prometheus.
 pub const METRIC_NAME_LABEL: &str = "__name__";
 
-/// Default lookback window in milliseconds (5 minutes).
-pub const DEFAULT_LOOKBACK_MS: i64 = 300_000;
+/// Default lookback window in nanoseconds (5 minutes).
+pub const DEFAULT_LOOKBACK_NS: i64 = 300_000_000_000;
 
-/// A time range in milliseconds since epoch.
+/// A time range in nanoseconds since epoch.
 #[derive(Debug, Clone, Copy)]
 pub struct TimeRange {
-    pub start_ms: i64,
-    pub end_ms: i64,
+    pub start_ns: i64,
+    pub end_ns: i64,
 }
 
 /// The result of a PromQL query.
@@ -33,7 +33,7 @@ pub enum QueryResult {
 #[derive(Debug, Clone)]
 pub struct InstantSample {
     pub labels: Labels,
-    pub timestamp_ms: i64,
+    pub timestamp_ns: i64,
     pub value: f64,
 }
 
