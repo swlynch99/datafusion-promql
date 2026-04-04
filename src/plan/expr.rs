@@ -26,7 +26,8 @@ use crate::func::{
 };
 use crate::node::{
     BinaryEval, DateTimeFunctionNode, InstantFunction, InstantVectorEval, MatchCardinality,
-    RangeFunctionEval, RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
+    RangeFunctionEval, RangeVectorEval, ScalarBinaryEval, StepVectorEval, VectorMatching,
+    convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
@@ -76,16 +77,19 @@ pub async fn plan_expr(
             let (child_plan, label_columns) =
                 plan_vector_selector(vs, source, time_range, 0, offset_ns).await?;
 
-            let node = if let Some(ts) = params.eval_ts_ns {
-                InstantVectorEval::instant(
+            if let Some(ts) = params.eval_ts_ns {
+                let node = InstantVectorEval::new(
                     child_plan,
                     ts,
                     DEFAULT_LOOKBACK_NS,
                     offset_ns,
                     label_columns,
-                )
+                );
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(node),
+                }))
             } else {
-                InstantVectorEval::range(
+                let node = StepVectorEval::new(
                     child_plan,
                     params.start_ns,
                     params.end_ns,
@@ -93,12 +97,11 @@ pub async fn plan_expr(
                     DEFAULT_LOOKBACK_NS,
                     offset_ns,
                     label_columns,
-                )
-            };
-
-            Ok(LogicalPlan::Extension(Extension {
-                node: Arc::new(node),
-            }))
+                );
+                Ok(LogicalPlan::Extension(Extension {
+                    node: Arc::new(node),
+                }))
+            }
         }
 
         Expr::Call(call) => plan_call(call, source, time_range, params).await,

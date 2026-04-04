@@ -13,28 +13,32 @@ use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-/// Physical plan node that aligns raw samples to a single evaluation timestamp
+/// Physical plan node that aligns raw samples to a range of step timestamps
 /// using the lookback window.
 ///
-/// For each series (grouped by label columns), picks the most recent sample
-/// within `[eval_ts - lookback, eval_ts]`.
+/// For each series (grouped by label columns), at each step timestamp picks
+/// the most recent sample within `[eval_ts - lookback, eval_ts]`.
 ///
-/// This is used for instant queries. For range queries that evaluate over
-/// multiple step timestamps, see [`super::StepVectorExec`].
+/// This is used for range queries. For instant (single-timestamp) queries, see
+/// [`super::InstantVectorExec`].
 #[derive(Debug)]
-pub(crate) struct InstantVectorExec {
+pub(crate) struct StepVectorExec {
     child: Arc<dyn ExecutionPlan>,
-    timestamp_ns: i64,
+    start_ns: i64,
+    end_ns: i64,
+    step_ns: i64,
     lookback_ns: i64,
     offset_ns: i64,
     label_columns: Vec<String>,
     properties: Arc<PlanProperties>,
 }
 
-impl InstantVectorExec {
+impl StepVectorExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        timestamp_ns: i64,
+        start_ns: i64,
+        end_ns: i64,
+        step_ns: i64,
         lookback_ns: i64,
         offset_ns: i64,
         label_columns: Vec<String>,
@@ -48,24 +52,37 @@ impl InstantVectorExec {
         ));
         Self {
             child,
-            timestamp_ns,
+            start_ns,
+            end_ns,
+            step_ns,
             lookback_ns,
             offset_ns,
             label_columns,
             properties,
         }
     }
-}
 
-impl DisplayAs for InstantVectorExec {
-    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "InstantVectorExec")
+    /// Generate the list of evaluation timestamps.
+    fn eval_timestamps(&self) -> Vec<i64> {
+        let mut timestamps = Vec::new();
+        let mut t = self.start_ns;
+        while t <= self.end_ns {
+            timestamps.push(t);
+            t += self.step_ns;
+        }
+        timestamps
     }
 }
 
-impl ExecutionPlan for InstantVectorExec {
+impl DisplayAs for StepVectorExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StepVectorExec")
+    }
+}
+
+impl ExecutionPlan for StepVectorExec {
     fn name(&self) -> &str {
-        "InstantVectorExec"
+        "StepVectorExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -94,7 +111,9 @@ impl ExecutionPlan for InstantVectorExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.timestamp_ns,
+            self.start_ns,
+            self.end_ns,
+            self.step_ns,
             self.lookback_ns,
             self.offset_ns,
             self.label_columns.clone(),
@@ -108,7 +127,7 @@ impl ExecutionPlan for InstantVectorExec {
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let schema = self.schema();
-        let eval_ts = self.timestamp_ns;
+        let eval_timestamps = self.eval_timestamps();
         let lookback_ns = self.lookback_ns;
         let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
@@ -169,33 +188,35 @@ impl ExecutionPlan for InstantVectorExec {
                 samples.sort_by_key(|(ts, _)| *ts);
             }
 
-            // For each series, find the most recent sample within
-            // [eval_ts - offset - lookback, eval_ts - offset].
+            // For each eval timestamp and each series, find the most recent
+            // sample within [eval_ts - lookback, eval_ts].
             let mut out_ts = Int64Builder::new();
             let mut out_val = Float64Builder::new();
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
-            // Apply offset: shift the lookup window into the past by offset_ns.
-            // The effective lookup time is eval_ts - offset_ns, but the
-            // result is reported at eval_ts.
-            let effective_ts = eval_ts - offset_ns;
-            let window_start = effective_ts - lookback_ns;
-            for (key, samples) in &series_map {
-                // Binary search for the last sample <= effective_ts.
-                let pos = samples.partition_point(|(ts, _)| *ts <= effective_ts);
-                if pos == 0 {
-                    continue; // No sample at or before effective_ts.
-                }
-                let (sample_ts, sample_val) = samples[pos - 1];
-                if sample_ts < window_start {
-                    continue; // Sample is outside the lookback window.
-                }
+            for &eval_ts in &eval_timestamps {
+                // Apply offset: shift the lookup window into the past by offset_ns.
+                // The effective lookup time is eval_ts - offset_ns, but the
+                // result is reported at eval_ts.
+                let effective_ts = eval_ts - offset_ns;
+                let window_start = effective_ts - lookback_ns;
+                for (key, samples) in &series_map {
+                    // Binary search for the last sample <= effective_ts.
+                    let pos = samples.partition_point(|(ts, _)| *ts <= effective_ts);
+                    if pos == 0 {
+                        continue; // No sample at or before effective_ts.
+                    }
+                    let (sample_ts, sample_val) = samples[pos - 1];
+                    if sample_ts < window_start {
+                        continue; // Sample is outside the lookback window.
+                    }
 
-                out_ts.append_value(eval_ts);
-                out_val.append_value(sample_val);
-                for (i, label_val) in key.iter().enumerate() {
-                    out_labels[i].append_value(label_val);
+                    out_ts.append_value(eval_ts);
+                    out_val.append_value(sample_val);
+                    for (i, label_val) in key.iter().enumerate() {
+                        out_labels[i].append_value(label_val);
+                    }
                 }
             }
 

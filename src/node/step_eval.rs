@@ -6,20 +6,22 @@ use std::hash::{Hash, Hasher};
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
-/// Custom logical node that aligns raw samples to a single evaluation timestamp.
+/// Custom logical node that aligns raw samples to a range of step timestamps.
 ///
-/// For the evaluation timestamp `t`, this node picks the most recent sample
-/// within the lookback window `[t - offset - lookback, t - offset]` for each series.
-/// The result is reported at timestamp `t` (the original eval timestamp).
+/// For each step timestamp `t` in `[start_ns, end_ns]` with `step_ns`, this
+/// node picks the most recent sample within the lookback window
+/// `[t - offset - lookback, t - offset]` for each series. The result is
+/// reported at timestamp `t` (the original eval timestamp).
 ///
-/// This is used for instant queries. For range queries that evaluate over
-/// multiple step timestamps, see [`super::StepVectorEval`].
+/// This is used for range queries. For instant (single-timestamp) queries, see
+/// [`super::InstantVectorEval`].
 #[derive(Debug, Clone)]
-pub(crate) struct InstantVectorEval {
+pub(crate) struct StepVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
-    /// The single evaluation timestamp (ns).
-    pub timestamp_ns: i64,
+    pub start_ns: i64,
+    pub end_ns: i64,
+    pub step_ns: i64,
     /// Lookback window in nanoseconds.
     pub lookback_ns: i64,
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
@@ -28,17 +30,21 @@ pub(crate) struct InstantVectorEval {
     pub label_columns: Vec<String>,
 }
 
-impl InstantVectorEval {
+impl StepVectorEval {
     pub fn new(
         input: LogicalPlan,
-        timestamp_ns: i64,
+        start_ns: i64,
+        end_ns: i64,
+        step_ns: i64,
         lookback_ns: i64,
         offset_ns: i64,
         label_columns: Vec<String>,
     ) -> Self {
         Self {
             input,
-            timestamp_ns,
+            start_ns,
+            end_ns,
+            step_ns,
             lookback_ns,
             offset_ns,
             label_columns,
@@ -46,9 +52,9 @@ impl InstantVectorEval {
     }
 }
 
-impl UserDefinedLogicalNodeCore for InstantVectorEval {
+impl UserDefinedLogicalNodeCore for StepVectorEval {
     fn name(&self) -> &str {
-        "InstantVectorEval"
+        "StepVectorEval"
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -66,8 +72,10 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "InstantVectorEval: ts={}, lookback={}ns, offset={}ns, group_by=[{}]",
-            self.timestamp_ns,
+            "StepVectorEval: range=[{}, {}], step={}ns, lookback={}ns, offset={}ns, group_by=[{}]",
+            self.start_ns,
+            self.end_ns,
+            self.step_ns,
             self.lookback_ns,
             self.offset_ns,
             self.label_columns.join(", ")
@@ -81,7 +89,9 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
     ) -> datafusion::common::Result<Self> {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
-            timestamp_ns: self.timestamp_ns,
+            start_ns: self.start_ns,
+            end_ns: self.end_ns,
+            step_ns: self.step_ns,
             lookback_ns: self.lookback_ns,
             offset_ns: self.offset_ns,
             label_columns: self.label_columns.clone(),
@@ -96,34 +106,41 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
     }
 }
 
-impl PartialEq for InstantVectorEval {
+impl PartialEq for StepVectorEval {
     fn eq(&self, other: &Self) -> bool {
-        self.timestamp_ns == other.timestamp_ns
+        self.start_ns == other.start_ns
+            && self.end_ns == other.end_ns
+            && self.step_ns == other.step_ns
             && self.lookback_ns == other.lookback_ns
             && self.offset_ns == other.offset_ns
             && self.label_columns == other.label_columns
     }
 }
 
-impl Eq for InstantVectorEval {}
+impl Eq for StepVectorEval {}
 
-impl Hash for InstantVectorEval {
+impl Hash for StepVectorEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.timestamp_ns.hash(state);
+        self.start_ns.hash(state);
+        self.end_ns.hash(state);
+        self.step_ns.hash(state);
         self.lookback_ns.hash(state);
         self.offset_ns.hash(state);
         self.label_columns.hash(state);
     }
 }
 
-impl PartialOrd for InstantVectorEval {
+impl PartialOrd for StepVectorEval {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for InstantVectorEval {
+impl Ord for StepVectorEval {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.timestamp_ns.cmp(&other.timestamp_ns)
+        self.start_ns
+            .cmp(&other.start_ns)
+            .then(self.end_ns.cmp(&other.end_ns))
+            .then(self.step_ns.cmp(&other.step_ns))
     }
 }
