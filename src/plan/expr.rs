@@ -20,13 +20,13 @@ use datafusion::datasource::MemTable;
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
-    AggregateFunction, datetime_func_to_expr, is_time_function, lookup_aggregate_function,
-    lookup_datetime_function, lookup_instant_function, lookup_range_function, lookup_sort_function,
-    make_label_join_udf, make_label_replace_udf,
+    AggregateFunction, datetime_func_to_expr, instant_func_to_expr, is_time_function,
+    lookup_aggregate_function, lookup_datetime_function, lookup_instant_function,
+    lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
 use crate::node::{
-    BinaryEval, InstantFuncEval, InstantVectorEval, MatchCardinality, RangeFunctionEval,
-    RangeVectorEval, ScalarBinaryEval, VectorMatching, convert_binary_op,
+    BinaryEval, InstantVectorEval, MatchCardinality, RangeFunctionEval, RangeVectorEval,
+    ScalarBinaryEval, ScalarFunction, VectorMatching, convert_binary_op,
 };
 use crate::types::{DEFAULT_LOOKBACK_NS, TimeRange};
 
@@ -160,7 +160,8 @@ async fn plan_call(
         }
         let vector_arg = &call.args.args[0];
         let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
-        let node = InstantFuncEval::new(child_plan, func)?;
+        let func_expr = instant_func_to_expr(&func, col("value"));
+        let node = ScalarFunction::new(child_plan, func_expr, func.to_string())?;
         return Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(node),
         }));
