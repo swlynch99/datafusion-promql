@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use chrono::DateTime;
 use clap::Parser;
-use datafusion::catalog::TableProvider;
-use datafusion::prelude::*;
 
 use datafusion_promql::PromqlPlanner;
-use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
-use datafusion_promql::error::{PromqlError, Result};
+use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::TimeRange;
 
 #[derive(Parser)]
@@ -40,63 +36,6 @@ struct Cli {
     physical: bool,
 }
 
-/// A metric source backed by a single parquet file.
-struct ParquetSource {
-    ctx: SessionContext,
-}
-
-impl ParquetSource {
-    async fn new(path: &str) -> std::result::Result<Self, Box<dyn std::error::Error>> {
-        let ctx = SessionContext::new();
-        // Register the parquet file so we can derive schemas.
-        ctx.register_parquet("metrics", path, Default::default())
-            .await?;
-        Ok(Self { ctx })
-    }
-}
-
-#[async_trait]
-impl MetricSource for ParquetSource {
-    async fn table_for_metric(
-        &self,
-        _metric_name: &str,
-        _matchers: &[Matcher],
-        _time_range: TimeRange,
-    ) -> Result<(Arc<dyn TableProvider>, TableFormat)> {
-        let table = self
-            .ctx
-            .table_provider("metrics")
-            .await
-            .map_err(|e| PromqlError::DataSource(e.to_string()))?;
-        Ok((table, TableFormat::Long))
-    }
-
-    async fn list_metrics(&self, _name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>> {
-        let table = self
-            .ctx
-            .table_provider("metrics")
-            .await
-            .map_err(|e| PromqlError::DataSource(e.to_string()))?;
-        let schema = table.schema();
-
-        // Derive label names from the schema: all Utf8 columns except __name__.
-        let label_names: Vec<String> = schema
-            .fields()
-            .iter()
-            .filter(|f| {
-                f.data_type() == &arrow::datatypes::DataType::Utf8 && f.name() != "__name__"
-            })
-            .map(|f| f.name().clone())
-            .collect();
-
-        Ok(vec![MetricMeta {
-            name: "unknown".into(),
-            label_names,
-            extra_columns: vec![],
-        }])
-    }
-}
-
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -109,7 +48,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             (cli.logical, cli.optimized, cli.physical)
         };
 
-    let source = Arc::new(ParquetSource::new(&cli.file).await?);
+    let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
 
     let logical_plan = if let Some(ts_ms) = cli.timestamp {
