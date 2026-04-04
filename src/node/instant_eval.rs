@@ -96,7 +96,10 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
             write!(
                 f,
                 "InstantVectorEval: range=[{}, {}], step={}ns, lookback={}ns, group_by=[{}]",
-                self.start_ns, self.end_ns, self.step_ns, self.lookback_ns,
+                self.start_ns,
+                self.end_ns,
+                self.step_ns,
+                self.lookback_ns,
                 self.label_columns.join(", ")
             )
         }
