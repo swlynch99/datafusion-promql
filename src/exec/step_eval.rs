@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{Float64Builder, UInt64Builder, StringBuilder};
+use arrow::array::{Float64Builder, StringBuilder, UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
