@@ -34,6 +34,10 @@ pub struct ParquetMetricSource {
     column_mapping: ColumnMapping,
     /// Cached metric metadata parsed from the parquet schema.
     metrics: Vec<MetricMeta>,
+    /// Cached `(min_ns, max_ns)` timestamp range read from the parquet file's
+    /// row-group statistics during initialization.  `None` when the file has no
+    /// timestamp column or carries no row-group statistics.
+    timestamp_range_ns: Option<(u64, u64)>,
 }
 
 impl ParquetMetricSource {
@@ -79,11 +83,29 @@ impl ParquetMetricSource {
         let column_mapping = rezolus_column_mapping();
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
 
+        // Cache the timestamp range from row-group statistics so callers can
+        // use it as default query bounds without a separate read_timestamp_range
+        // call.  Failures (no timestamp column, no statistics) are silently
+        // treated as None rather than aborting initialization.
+        let timestamp_range_ns = read_timestamp_range(path).ok();
+
         Ok(Self {
             table_provider,
             column_mapping,
             metrics,
+            timestamp_range_ns,
         })
+    }
+
+    /// Return the `(min_ns, max_ns)` timestamp range cached from the parquet
+    /// file's row-group statistics, or `None` if the file carries no timestamp
+    /// statistics.
+    ///
+    /// This can be used as default query bounds so that DataFusion's parquet
+    /// reader can prune row groups even when the caller does not provide an
+    /// explicit time range.
+    pub fn timestamp_range(&self) -> Option<(u64, u64)> {
+        self.timestamp_range_ns
     }
 }
 

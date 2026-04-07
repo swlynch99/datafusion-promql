@@ -4,7 +4,7 @@ use chrono::DateTime;
 use clap::Parser;
 
 use datafusion_promql::PromqlPlanner;
-use datafusion_promql::parquet::{ParquetMetricSource, read_timestamp_range};
+use datafusion_promql::parquet::ParquetMetricSource;
 use datafusion_promql::types::TimeRange;
 
 #[derive(Parser)]
@@ -60,11 +60,13 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             (cli.logical, cli.optimized, cli.physical)
         };
 
-    // Auto-detect timestamp range from parquet metadata when not provided.
-    let (auto_min_ns, auto_max_ns) = read_timestamp_range(&cli.file)?;
-
     let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
+
+    // Auto-detect timestamp range from the cached parquet row-group statistics.
+    let (auto_min_ns, auto_max_ns) = source
+        .timestamp_range()
+        .ok_or("no timestamp statistics found in parquet metadata")?;
 
     const NS_PER_SEC: u64 = 1_000_000_000;
 

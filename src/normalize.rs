@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::datasource::{ColumnMapping, MatchOp, Matcher};
 use crate::error::{PromqlError, Result};
-use crate::types::Labels;
+use crate::types::{Labels, TimeRange};
 use arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::Column;
@@ -94,12 +94,18 @@ fn find_matching_columns(
 /// All branches are combined with UNION ALL. The caller applies time-range
 /// filtering and sorting on top.
 ///
+/// `time_range` is embedded directly in each branch's `scan_with_filters` so
+/// that the parquet reader can prune row groups without relying on the
+/// DataFusion optimizer to push the outer Filter node all the way down through
+/// the Union → Sort → Projection chain.
+///
 /// Returns `(LogicalPlan, label_column_names)`.
 pub(crate) fn normalize_wide_to_long(
     provider: Arc<dyn TableProvider>,
     mapping: &ColumnMapping,
     metric_name: &str,
     matchers: &[Matcher],
+    time_range: &TimeRange,
 ) -> Result<(LogicalPlan, Vec<String>)> {
     let (matched, all_label_keys) =
         find_matching_columns(provider.as_ref(), mapping, metric_name, matchers)?;
@@ -124,6 +130,31 @@ pub(crate) fn normalize_wide_to_long(
     let ts_col_idx = schema
         .index_of(mapping.timestamp_column.as_str())
         .map_err(|e| PromqlError::Plan(format!("timestamp column not found: {e}")))?;
+
+    // Build scan-level time-range filters once, shared across all branches.
+    // These use the original column name and type so they can be pushed down
+    // to the parquet reader for row-group pruning directly — without depending
+    // on the DataFusion optimizer to propagate them through Union/Sort/Projection.
+    // The outer Filter node added by plan_vector_selector still provides
+    // row-level correctness; these scan filters are purely for pruning.
+    let scan_time_filters: Vec<Expr> = {
+        let ts_col = col(mapping.timestamp_column.as_str());
+        let is_int64 = ts_field.data_type() == &DataType::Int64;
+        let mut filters = Vec::new();
+        if let Some(start) = time_range.start_ns {
+            let bound = if is_int64 {
+                lit(start as i64)
+            } else {
+                lit(start)
+            };
+            filters.push(ts_col.clone().gt_eq(bound));
+        }
+        if let Some(end) = time_range.end_ns {
+            let bound = if is_int64 { lit(end as i64) } else { lit(end) };
+            filters.push(ts_col.lt_eq(bound));
+        }
+        filters
+    };
 
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
     for (idx, mc) in matched.iter().enumerate() {
@@ -166,7 +197,7 @@ pub(crate) fn normalize_wide_to_long(
             scan_alias,
             provider_as_source(Arc::clone(&provider)),
             projection,
-            vec![],
+            scan_time_filters.clone(),
         )
         .map_err(|e| PromqlError::Plan(format!("failed to build scan: {e}")))?
         .project(exprs)
