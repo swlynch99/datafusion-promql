@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-use parquet::file::metadata::ParquetStatisticsPolicy;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -267,13 +266,6 @@ fn build_metric_metadata(
 
 /// Read the Arrow schema from a parquet file's footer metadata.
 ///
-/// Row-group statistics (column min/max, null counts, encoding stats, size
-/// stats) are skipped during footer parsing.  For wide files with many
-/// columns and row groups — like Rezolus ~950-column parquet files — this
-/// avoids the dominant cost of footer decoding (allocating `Statistics`
-/// structs and byte arrays for every column chunk) while still reading the
-/// full Arrow schema including field-level metadata.
-///
 /// The returned schema can be passed to
 /// [`ParquetMetricSource::try_new_with_schema`] to avoid re-reading the
 /// footer during DataFusion registration.
@@ -285,16 +277,7 @@ pub fn read_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
     // `rezolus_parse_column`; retaining the Arrow-level metadata can produce
     // unexpected label keys when the file uses different key names than our
     // parsing conventions expect.
-    //
-    // Skip row-group statistics (column min/max, null counts, encoding stats,
-    // size stats) to avoid unnecessary allocations: for wide files with many
-    // columns and row groups those stats are the dominant cost of footer
-    // parsing and are not needed for schema extraction.
-    let options = ArrowReaderOptions::new()
-        .with_skip_arrow_metadata(true)
-        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
-        .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
-        .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
         .map_err(|e| PromqlError::DataSource(format!("failed to read parquet schema: {e}")))?;
     Ok(Arc::clone(builder.schema()))
