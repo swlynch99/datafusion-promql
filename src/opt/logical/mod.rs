@@ -1,11 +1,13 @@
 mod datetime_func_to_projection;
 mod instant_func_to_projection;
 mod lift_constant_projections;
+mod push_instant_eval_through_union;
 mod range_vector_to_aggregation;
 mod remove_noop_projections;
 
 pub use datetime_func_to_projection::DateTimeFuncToProjection;
 pub use instant_func_to_projection::InstantFuncToProjection;
 pub use lift_constant_projections::LiftConstantProjections;
+pub use push_instant_eval_through_union::PushInstantEvalThroughUnion;
 pub use range_vector_to_aggregation::RangeVectorToAggregation;
 pub use remove_noop_projections::RemoveNoopProjections;
