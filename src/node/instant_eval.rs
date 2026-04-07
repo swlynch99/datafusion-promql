@@ -94,6 +94,31 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
         cols.insert("timestamp".to_string());
         cols
     }
+
+    fn necessary_children_exprs(&self, output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        let schema = self.input.schema();
+
+        // Start with what the parent needs.
+        let mut needed: HashSet<usize> = output_columns.iter().copied().collect();
+
+        // Always require timestamp, value, and all label columns — these are
+        // needed for the lookback-window alignment even if the parent doesn't
+        // reference them.
+        for (i, field) in schema.fields().iter().enumerate() {
+            let name = field.name().as_str();
+            if name == "timestamp"
+                || name == "value"
+                || self.label_columns.iter().any(|lc| lc == name)
+            {
+                needed.insert(i);
+            }
+        }
+
+        let mut indices: Vec<usize> = needed.into_iter().collect();
+        indices.sort();
+        // Single child.
+        Some(vec![indices])
+    }
 }
 
 impl PartialEq for InstantVectorEval {
