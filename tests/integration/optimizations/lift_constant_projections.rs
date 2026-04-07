@@ -897,6 +897,7 @@ fn wrap_in_instant_vector_eval(input: LogicalPlan, label_columns: Vec<String>) -
         300_000_000_000, // lookback_ns (5 min)
         0,               // offset_ns
         label_columns,
+        None,
     );
     LogicalPlan::Extension(Extension {
         node: Arc::new(eval),

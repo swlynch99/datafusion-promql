@@ -15,7 +15,7 @@ Last updated: 2026-04-07.
 - **Aggregation operators:** `sum`, `avg`, `count`, `min`, `max`, `stddev`, `stdvar`, `group`, `topk`, `bottomk`, `quantile`, `count_values`, `limitk`, `limit_ratio`
 - **Binary operators:** `+`, `-`, `*`, `/`, `%`, `^`, `==`, `!=`, `<`, `>`, `<=`, `>=`
 - **Set operators:** `and`, `or`, `unless`
-- **Modifiers:** `offset`, `bool`
+- **Modifiers:** `offset`, `bool`, `@`
 
 ---
 
@@ -61,5 +61,4 @@ These operate on a matrix (range vector) and return an instant vector.
 
 | Modifier | Description |
 |----------|-------------|
-| `@` | Evaluate a selector at a fixed timestamp: `metric_name @ 1609459200`. |
 | Subqueries | Evaluate an instant vector expression over a range: `rate(metric[5m])[30m:1m]`. |

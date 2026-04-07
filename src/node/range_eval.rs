@@ -34,6 +34,9 @@ pub(crate) struct RangeVectorEval {
     pub label_columns: Vec<String>,
     /// Output schema: timestamp, timestamps (list), values (list), labels.
     pub output_schema: DFSchemaRef,
+    /// Fixed lookup timestamp from the `@` modifier (ns). When set, the window
+    /// is centered on this timestamp instead of the eval timestamp.
+    pub at_timestamp_ns: Option<u64>,
 }
 
 /// Compute the output schema for a range vector windowing node.
@@ -84,6 +87,7 @@ impl RangeVectorEval {
         range_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
+        at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;
         Ok(Self {
@@ -96,10 +100,12 @@ impl RangeVectorEval {
             offset_ns,
             label_columns,
             output_schema,
+            at_timestamp_ns,
         })
     }
 
     /// Create a node for a range query over `[start, end]` with step.
+    #[allow(clippy::too_many_arguments)]
     pub fn range(
         input: LogicalPlan,
         start_ns: u64,
@@ -108,6 +114,7 @@ impl RangeVectorEval {
         range_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
+        at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;
         Ok(Self {
@@ -120,6 +127,7 @@ impl RangeVectorEval {
             offset_ns,
             label_columns,
             output_schema,
+            at_timestamp_ns,
         })
     }
 }
@@ -145,23 +153,20 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
         if let Some(ts) = self.eval_ts_ns {
             write!(
                 f,
-                "RangeVectorEval: ts={ts}, range={}ns, offset={}ns, group_by=[{}]",
-                self.range_ns,
-                self.offset_ns,
-                self.label_columns.join(", ")
-            )
+                "RangeVectorEval: ts={ts}, range={}ns, offset={}ns",
+                self.range_ns, self.offset_ns,
+            )?;
         } else {
             write!(
                 f,
-                "RangeVectorEval: range=[{}, {}], step={}ns, window={}ns, offset={}ns, group_by=[{}]",
-                self.start_ns,
-                self.end_ns,
-                self.step_ns,
-                self.range_ns,
-                self.offset_ns,
-                self.label_columns.join(", ")
-            )
+                "RangeVectorEval: range=[{}, {}], step={}ns, window={}ns, offset={}ns",
+                self.start_ns, self.end_ns, self.step_ns, self.range_ns, self.offset_ns,
+            )?;
         }
+        if let Some(at) = self.at_timestamp_ns {
+            write!(f, ", @={at}")?;
+        }
+        write!(f, ", group_by=[{}]", self.label_columns.join(", "))
     }
 
     fn with_exprs_and_inputs(
@@ -179,6 +184,7 @@ impl UserDefinedLogicalNodeCore for RangeVectorEval {
             offset_ns: self.offset_ns,
             label_columns: self.label_columns.clone(),
             output_schema: Arc::clone(&self.output_schema),
+            at_timestamp_ns: self.at_timestamp_ns,
         })
     }
 
@@ -198,6 +204,7 @@ impl PartialEq for RangeVectorEval {
             && self.step_ns == other.step_ns
             && self.offset_ns == other.offset_ns
             && self.label_columns == other.label_columns
+            && self.at_timestamp_ns == other.at_timestamp_ns
     }
 }
 
@@ -212,6 +219,7 @@ impl Hash for RangeVectorEval {
         self.step_ns.hash(state);
         self.offset_ns.hash(state);
         self.label_columns.hash(state);
+        self.at_timestamp_ns.hash(state);
     }
 }
 

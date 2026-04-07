@@ -26,6 +26,10 @@ pub struct InstantVectorEval {
     pub offset_ns: i64,
     /// Label column names used for grouping series (excludes timestamp/value).
     pub label_columns: Vec<String>,
+    /// Fixed lookup timestamp from the `@` modifier (ns). When set, the lookup
+    /// uses this timestamp instead of `timestamp_ns`, but the output is still
+    /// reported at `timestamp_ns`.
+    pub at_timestamp_ns: Option<u64>,
 }
 
 impl InstantVectorEval {
@@ -35,6 +39,7 @@ impl InstantVectorEval {
         lookback_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
+        at_timestamp_ns: Option<u64>,
     ) -> Self {
         Self {
             input,
@@ -42,6 +47,7 @@ impl InstantVectorEval {
             lookback_ns,
             offset_ns,
             label_columns,
+            at_timestamp_ns,
         }
     }
 }
@@ -66,12 +72,13 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "InstantVectorEval: ts={}, lookback={}ns, offset={}ns, group_by=[{}]",
-            self.timestamp_ns,
-            self.lookback_ns,
-            self.offset_ns,
-            self.label_columns.join(", ")
-        )
+            "InstantVectorEval: ts={}, lookback={}ns, offset={}ns",
+            self.timestamp_ns, self.lookback_ns, self.offset_ns,
+        )?;
+        if let Some(at) = self.at_timestamp_ns {
+            write!(f, ", @={at}")?;
+        }
+        write!(f, ", group_by=[{}]", self.label_columns.join(", "))
     }
 
     fn with_exprs_and_inputs(
@@ -85,6 +92,7 @@ impl UserDefinedLogicalNodeCore for InstantVectorEval {
             lookback_ns: self.lookback_ns,
             offset_ns: self.offset_ns,
             label_columns: self.label_columns.clone(),
+            at_timestamp_ns: self.at_timestamp_ns,
         })
     }
 
@@ -127,6 +135,7 @@ impl PartialEq for InstantVectorEval {
             && self.lookback_ns == other.lookback_ns
             && self.offset_ns == other.offset_ns
             && self.label_columns == other.label_columns
+            && self.at_timestamp_ns == other.at_timestamp_ns
     }
 }
 
@@ -138,6 +147,7 @@ impl Hash for InstantVectorEval {
         self.lookback_ns.hash(state);
         self.offset_ns.hash(state);
         self.label_columns.hash(state);
+        self.at_timestamp_ns.hash(state);
     }
 }
 

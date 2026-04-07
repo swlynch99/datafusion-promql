@@ -65,6 +65,8 @@ impl OptimizerRule for RangeVectorToAggregation {
 
         let input = eval.input.clone();
         let range_ns = eval.range_ns;
+        let offset_ns = eval.offset_ns;
+        let at_timestamp_ns = eval.at_timestamp_ns;
         let label_columns = &eval.label_columns;
 
         // Use the RangeFunctionEval's output schema as the target.
@@ -109,14 +111,30 @@ impl OptimizerRule for RangeVectorToAggregation {
             .cross_join(values_plan)?
             .build()?;
 
-        // Step 4: Filter to keep only samples within the range window
-        // [eval_ts - range_ns, eval_ts] for each evaluation timestamp.
-        // Use sample_ts + range_ns >= eval_ts to avoid unsigned underflow.
+        // Step 4: Filter to keep only samples within the range window.
+        // When the @ modifier is set, the window is pinned to the @ timestamp
+        // (after offset) instead of each eval timestamp.
+        // Use sample_ts + range_ns >= window_ts to avoid unsigned underflow.
+        let window_ts: Expr = if let Some(at_ts) = at_timestamp_ns {
+            // @ modifier: pin the window to the fixed timestamp (with offset).
+            let effective = (at_ts as i64 - offset_ns) as u64;
+            lit(effective)
+        } else if offset_ns != 0 {
+            // Offset without @: shift the window relative to eval_ts.
+            // effective = eval_ts - offset_ns
+            if offset_ns > 0 {
+                col("eval_ts") - lit(offset_ns as u64)
+            } else {
+                col("eval_ts") + lit((-offset_ns) as u64)
+            }
+        } else {
+            col("eval_ts")
+        };
         let filtered = LogicalPlanBuilder::from(cross_joined)
             .filter(
                 (col("sample_ts") + lit(range_ns))
-                    .gt_eq(col("eval_ts"))
-                    .and(col("sample_ts").lt_eq(col("eval_ts"))),
+                    .gt_eq(window_ts.clone())
+                    .and(col("sample_ts").lt_eq(window_ts)),
             )?
             .build()?;
 

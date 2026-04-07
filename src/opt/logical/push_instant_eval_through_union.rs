@@ -92,6 +92,7 @@ impl OptimizerRule for PushInstantEvalThroughUnion {
                     eval.lookback_ns,
                     eval.offset_ns,
                     eval.label_columns.clone(),
+                    eval.at_timestamp_ns,
                 );
                 Arc::new(LogicalPlan::Extension(Extension {
                     node: Arc::new(new_eval),
