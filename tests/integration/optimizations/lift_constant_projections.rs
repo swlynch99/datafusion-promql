@@ -1135,6 +1135,237 @@ fn test_composed_instant_vector_eval_over_union() {
     assert!(!is_any_literal(&outer.expr[3]));
 }
 
+// ─── StepVectorEval pattern tests ───────────────────────────────────────────
+
+/// Helper: wrap a plan in a StepVectorEval node.
+fn wrap_in_step_vector_eval(input: LogicalPlan, label_columns: Vec<String>) -> LogicalPlan {
+    use datafusion_promql::node::StepVectorEval;
+    let eval = StepVectorEval::new(
+        input,
+        0,               // start_ns
+        60_000_000_000,  // end_ns: 60s
+        10_000_000_000,  // step_ns: 10s
+        300_000_000_000, // lookback_ns (5 min)
+        0,               // offset_ns
+        label_columns,
+        None,
+    );
+    LogicalPlan::Extension(Extension {
+        node: Arc::new(eval),
+    })
+}
+
+/// When a StepVectorEval wraps a Projection with constant columns,
+/// those constants should be lifted above the eval node.
+#[test]
+fn test_step_vector_eval_lifts_constants() {
+    use datafusion_promql::node::StepVectorEval;
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            col("ts").alias("host"), // non-constant label
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_step_vector_eval(proj, vec!["__name__".to_string(), "host".to_string()]);
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(
+        transformed,
+        "rule should lift constants past StepVectorEval"
+    );
+
+    // Top-level should be a Projection with the constant.
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert_eq!(outer.expr.len(), 4);
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // Under the projection should be a StepVectorEval.
+    let LogicalPlan::Extension(ref ext) = *outer.input else {
+        panic!("expected Extension under projection");
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<StepVectorEval>()
+        .expect("expected StepVectorEval");
+
+    // __name__ should be removed from label_columns.
+    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+
+    // Inner projection should have 3 columns (timestamp, value, host).
+    let LogicalPlan::Projection(ref inner_proj) = eval.input else {
+        panic!("expected Projection inside StepVectorEval");
+    };
+    assert_eq!(inner_proj.expr.len(), 3);
+}
+
+/// Timestamp and value constants should NOT be lifted through StepVectorEval.
+#[test]
+fn test_step_vector_eval_preserves_timestamp_and_value() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            lit(1000u64).alias("timestamp"),
+            lit(42.0f64).alias("value"),
+            lit("cpu").alias("__name__"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_step_vector_eval(proj, vec!["__name__".to_string()]);
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed, "rule should lift __name__");
+
+    // timestamp and value should remain inside, only __name__ lifted.
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top");
+    };
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+    // timestamp and value positions should NOT be literals in the outer projection.
+    assert!(!is_any_literal(&outer.expr[0]));
+    assert!(!is_any_literal(&outer.expr[1]));
+}
+
+/// When the child of StepVectorEval is not a Projection, the rule should
+/// not fire.
+#[test]
+fn test_step_vector_eval_non_projection_child_unchanged() {
+    let scan = make_scan("t0");
+    let plan = wrap_in_step_vector_eval(scan, vec![]);
+    let (_, transformed) = apply_rule(plan);
+    assert!(!transformed);
+}
+
+/// When there are no constant columns, the rule should not fire.
+#[test]
+fn test_step_vector_eval_no_constants_unchanged() {
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let plan = wrap_in_step_vector_eval(proj, vec![]);
+    let (_, transformed) = apply_rule(plan);
+    assert!(!transformed);
+}
+
+/// StepVectorEval parameters (start/end/step/lookback/offset/at) are
+/// preserved after lifting.
+#[test]
+fn test_step_vector_eval_preserves_parameters() {
+    use datafusion_promql::node::StepVectorEval;
+    let scan = make_scan("t0");
+    let proj = LogicalPlanBuilder::from(scan)
+        .project(vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("prod").alias("env"),
+        ])
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let eval = StepVectorEval::new(
+        proj,
+        10_000_000_000,
+        70_000_000_000,
+        5_000_000_000,
+        30_000_000_000,
+        -2_000_000_000,
+        vec!["__name__".to_string(), "env".to_string()],
+        Some(42_000_000_000),
+    );
+    let plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(eval),
+    });
+
+    let (result, transformed) = apply_rule(plan);
+    assert!(transformed);
+
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top");
+    };
+    let LogicalPlan::Extension(ref ext) = *outer.input else {
+        panic!("expected Extension under projection");
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<StepVectorEval>()
+        .expect("expected StepVectorEval");
+
+    assert_eq!(eval.start_ns, 10_000_000_000);
+    assert_eq!(eval.end_ns, 70_000_000_000);
+    assert_eq!(eval.step_ns, 5_000_000_000);
+    assert_eq!(eval.lookback_ns, 30_000_000_000);
+    assert_eq!(eval.offset_ns, -2_000_000_000);
+    assert_eq!(eval.at_timestamp_ns, Some(42_000_000_000));
+    assert_eq!(eval.label_columns, Vec::<String>::new()); // both lifted
+}
+
+/// Composed: StepVectorEval over Union with shared constants should lift
+/// constants above the eval, exposing the direct StepVectorEval → Union
+/// edge for PushStepEvalThroughUnion.
+#[test]
+fn test_composed_step_vector_eval_over_union() {
+    use datafusion_promql::node::StepVectorEval;
+    let union = make_union(vec![
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host1").alias("host"),
+        ],
+        vec![
+            col("ts").alias("timestamp"),
+            col("val").alias("value"),
+            lit("cpu").alias("__name__"),
+            lit("host2").alias("host"),
+        ],
+    ]);
+
+    let plan = wrap_in_step_vector_eval(union, vec!["__name__".to_string(), "host".to_string()]);
+
+    let (result, transformed) = apply_rule_to_fixpoint(plan);
+    assert!(transformed);
+
+    // After fixpoint: Projection(__name__=cpu) -> StepVectorEval -> ... -> Union
+    let LogicalPlan::Projection(outer) = &result else {
+        panic!("expected Projection at top, got:\n{result}");
+    };
+    assert!(is_literal_alias(&outer.expr[2], "cpu", "__name__"));
+
+    // host should not be lifted (differs between branches).
+    assert!(!is_any_literal(&outer.expr[3]));
+
+    // Under the outer projection should be a StepVectorEval with only "host"
+    // in label_columns.
+    let LogicalPlan::Extension(ref ext) = *outer.input else {
+        panic!("expected Extension under projection");
+    };
+    let eval = ext
+        .node
+        .as_any()
+        .downcast_ref::<StepVectorEval>()
+        .expect("expected StepVectorEval");
+    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 /// Check if an expression is `lit(expected_value).alias(expected_name)`.
