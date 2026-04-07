@@ -3,6 +3,7 @@ mod fold_redundant_aggregation;
 mod instant_func_to_projection;
 mod lift_constant_projections;
 mod push_instant_eval_through_union;
+mod push_step_eval_through_union;
 mod range_vector_to_aggregation;
 mod remove_noop_projections;
 
@@ -11,5 +12,6 @@ pub use fold_redundant_aggregation::FoldRedundantAggregation;
 pub use instant_func_to_projection::InstantFuncToProjection;
 pub use lift_constant_projections::LiftConstantProjections;
 pub use push_instant_eval_through_union::PushInstantEvalThroughUnion;
+pub use push_step_eval_through_union::PushStepEvalThroughUnion;
 pub use range_vector_to_aggregation::RangeVectorToAggregation;
 pub use remove_noop_projections::RemoveNoopProjections;

@@ -16,7 +16,7 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 /// This is used for range queries. For instant (single-timestamp) queries, see
 /// [`super::InstantVectorEval`].
 #[derive(Debug, Clone)]
-pub(crate) struct StepVectorEval {
+pub struct StepVectorEval {
     /// The child plan that produces raw samples in long format.
     pub input: LogicalPlan,
     pub start_ns: u64,
