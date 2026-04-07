@@ -34,7 +34,7 @@ rgb = { version = "0.8", optional = true }
 terminal_size = { version = "0.4", optional = true }
 
 [features]
-parquet = ["datafusion/parquet", "dep:parquet"]
+parquet = ["datafusion/parquet", "dep:parquet", "arrow/ipc"]
 plot = ["parquet", "textplots", "rgb", "terminal_size"]
 
 [dev-dependencies]
