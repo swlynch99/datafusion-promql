@@ -6,6 +6,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl};
 use datafusion::prelude::*;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::file::reader::FileReader;
@@ -54,20 +56,23 @@ impl ParquetMetricSource {
     pub async fn try_new_with_schema(path: impl AsRef<Path>, schema: Arc<Schema>) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
 
-        let ctx = SessionContext::new();
-        let parquet_options = ParquetReadOptions {
-            file_sort_order: vec![vec![col("timestamp").sort(true, false)]],
-            schema: Some(schema.as_ref()),
-            ..Default::default()
-        };
-        ctx.register_parquet("__parquet_src", &path_str, parquet_options)
-            .await
-            .map_err(|e| PromqlError::DataSource(format!("failed to register parquet: {e}")))?;
-
-        let table_provider = ctx
-            .table_provider("__parquet_src")
-            .await
-            .map_err(|e| PromqlError::DataSource(format!("failed to get table provider: {e}")))?;
+        // Build a ListingTable with the pre-read schema, bypassing DataFusion's
+        // slow schema-inference path. The schema has already had Arrow IPC field
+        // metadata stripped by read_schema (via with_skip_arrow_metadata), so
+        // parse_column_from_metadata falls back to name-based rezolus_parse_column.
+        let table_url = ListingTableUrl::parse(&path_str)
+            .map_err(|e| PromqlError::DataSource(format!("failed to parse table URL: {e}")))?;
+        let file_format = Arc::new(ParquetFormat::default());
+        let listing_opts = ListingOptions::new(file_format)
+            .with_file_extension(".parquet")
+            .with_file_sort_order(vec![vec![col("timestamp").sort(true, false)]]);
+        let config = ListingTableConfig::new(table_url)
+            .with_listing_options(listing_opts)
+            .with_schema(schema);
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(ListingTable::try_new(config).map_err(|e| {
+                PromqlError::DataSource(format!("failed to create listing table: {e}"))
+            })?);
 
         let column_mapping = rezolus_column_mapping();
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
