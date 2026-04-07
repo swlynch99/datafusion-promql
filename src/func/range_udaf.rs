@@ -125,7 +125,7 @@ impl Accumulator for RangeAccumulator {
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         self.samples.sort_by_key(|(ts, _)| *ts);
-        match self.func.evaluate(&self.samples) {
+        match self.func.evaluate(&self.samples, 0, None) {
             Some(v) => Ok(ScalarValue::Float64(Some(v))),
             None => Ok(ScalarValue::Float64(None)),
         }

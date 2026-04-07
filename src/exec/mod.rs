@@ -94,7 +94,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 .map(|f| f.name().clone())
                 .filter(|n| n != "timestamp" && n != "value")
                 .collect();
-            let exec = RangeFunctionExec::new(child, eval.func, label_columns);
+            let exec = RangeFunctionExec::new(child, eval.func, eval.scalar_arg, label_columns);
             return Ok(Some(Arc::new(exec)));
         }
 

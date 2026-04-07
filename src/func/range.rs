@@ -15,6 +15,10 @@ pub(crate) enum RangeFunction {
     Idelta,
     /// Average value of all samples in the range.
     AvgOverTime,
+    /// Per-second derivative using simple linear regression (gauge metric).
+    Deriv,
+    /// Predict value t seconds in the future using simple linear regression.
+    PredictLinear,
 }
 
 impl fmt::Display for RangeFunction {
@@ -26,6 +30,8 @@ impl fmt::Display for RangeFunction {
             Self::Delta => write!(f, "delta"),
             Self::Idelta => write!(f, "idelta"),
             Self::AvgOverTime => write!(f, "avg_over_time"),
+            Self::Deriv => write!(f, "deriv"),
+            Self::PredictLinear => write!(f, "predict_linear"),
         }
     }
 }
@@ -39,6 +45,8 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
         "delta" => Some(RangeFunction::Delta),
         "idelta" => Some(RangeFunction::Idelta),
         "avg_over_time" => Some(RangeFunction::AvgOverTime),
+        "deriv" => Some(RangeFunction::Deriv),
+        "predict_linear" => Some(RangeFunction::PredictLinear),
         _ => None,
     }
 }
@@ -48,7 +56,16 @@ impl RangeFunction {
     ///
     /// Samples must be sorted by timestamp. Returns `None` if there are
     /// insufficient samples to compute a result.
-    pub fn evaluate(&self, samples: &[(u64, f64)]) -> Option<f64> {
+    ///
+    /// `eval_ts_ns` is the evaluation timestamp in nanoseconds (used by
+    /// `deriv` and `predict_linear`). `scalar_arg` is the extra scalar
+    /// argument for functions like `predict_linear`.
+    pub fn evaluate(
+        &self,
+        samples: &[(u64, f64)],
+        eval_ts_ns: u64,
+        scalar_arg: Option<f64>,
+    ) -> Option<f64> {
         if samples.is_empty() {
             return None;
         }
@@ -105,8 +122,49 @@ impl RangeFunction {
                 Some(last_val - prev_val)
             }
             Self::AvgOverTime => unreachable!(),
+            Self::Deriv => {
+                let (_intercept, slope) = linear_regression(samples, eval_ts_ns);
+                Some(slope)
+            }
+            Self::PredictLinear => {
+                let t_seconds = scalar_arg.expect("predict_linear requires a scalar argument");
+                let (intercept, slope) = linear_regression(samples, eval_ts_ns);
+                Some(slope * t_seconds + intercept)
+            }
         }
     }
+}
+
+/// Simple linear regression over `(timestamp_ns, value)` samples.
+///
+/// Computes intercept and slope where x-values are seconds relative to
+/// `intercept_time_ns`. This matches the Prometheus implementation:
+/// intercept is the predicted value at `intercept_time_ns`, and slope is
+/// the per-second rate of change.
+///
+/// Returns `(intercept, slope)`.
+fn linear_regression(samples: &[(u64, f64)], intercept_time_ns: u64) -> (f64, f64) {
+    let n = samples.len() as f64;
+    let mut sum_x = 0.0;
+    let mut sum_y = 0.0;
+    let mut sum_xy = 0.0;
+    let mut sum_x2 = 0.0;
+
+    for &(ts, val) in samples {
+        let x = (ts as f64 - intercept_time_ns as f64) / 1_000_000_000.0;
+        sum_x += x;
+        sum_y += val;
+        sum_xy += x * val;
+        sum_x2 += x * x;
+    }
+
+    let cov_xy = sum_xy - sum_x * sum_y / n;
+    let var_x = sum_x2 - sum_x * sum_x / n;
+
+    let slope = cov_xy / var_x;
+    let intercept = sum_y / n - slope * sum_x / n;
+
+    (intercept, slope)
 }
 
 /// Compute the total counter increase across the samples, handling resets.
@@ -142,7 +200,7 @@ mod tests {
             (4_000_000_000, 40.0),
             (5_000_000_000, 50.0),
         ];
-        let result = RangeFunction::Rate.evaluate(&samples).unwrap();
+        let result = RangeFunction::Rate.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 10.0).abs() < f64::EPSILON,
             "expected 10.0, got {result}"
@@ -160,7 +218,7 @@ mod tests {
             (3_000_000_000, 5.0), // reset
             (4_000_000_000, 15.0),
         ];
-        let result = RangeFunction::Rate.evaluate(&samples).unwrap();
+        let result = RangeFunction::Rate.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 8.75).abs() < f64::EPSILON,
             "expected 8.75, got {result}"
@@ -170,13 +228,13 @@ mod tests {
     #[test]
     fn test_rate_insufficient_samples() {
         let samples = vec![(1_000_000_000, 10.0)];
-        assert!(RangeFunction::Rate.evaluate(&samples).is_none());
+        assert!(RangeFunction::Rate.evaluate(&samples, 0, None).is_none());
     }
 
     #[test]
     fn test_rate_zero_duration() {
         let samples = vec![(1_000_000_000, 10.0), (1_000_000_000, 20.0)];
-        assert!(RangeFunction::Rate.evaluate(&samples).is_none());
+        assert!(RangeFunction::Rate.evaluate(&samples, 0, None).is_none());
     }
 
     #[test]
@@ -190,7 +248,7 @@ mod tests {
             (4_000_000_000, 40.0),
             (5_000_000_000, 50.0),
         ];
-        let result = RangeFunction::Irate.evaluate(&samples).unwrap();
+        let result = RangeFunction::Irate.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 10.0).abs() < f64::EPSILON,
             "expected 10.0, got {result}"
@@ -206,7 +264,7 @@ mod tests {
             (2_000_000_000, 20.0),
             (3_000_000_000, 5.0),
         ];
-        let result = RangeFunction::Irate.evaluate(&samples).unwrap();
+        let result = RangeFunction::Irate.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 5.0).abs() < f64::EPSILON,
             "expected 5.0, got {result}"
@@ -221,7 +279,7 @@ mod tests {
             (2_000_000_000, 120.0),
             (3_000_000_000, 130.0),
         ];
-        let result = RangeFunction::Increase.evaluate(&samples).unwrap();
+        let result = RangeFunction::Increase.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 30.0).abs() < f64::EPSILON,
             "expected 30.0, got {result}"
@@ -238,7 +296,7 @@ mod tests {
             (3_000_000_000, 5.0),
             (4_000_000_000, 15.0),
         ];
-        let result = RangeFunction::Increase.evaluate(&samples).unwrap();
+        let result = RangeFunction::Increase.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 35.0).abs() < f64::EPSILON,
             "expected 35.0, got {result}"
@@ -253,7 +311,7 @@ mod tests {
             (2_000_000_000, 12.0),
             (3_000_000_000, 18.0),
         ];
-        let result = RangeFunction::Delta.evaluate(&samples).unwrap();
+        let result = RangeFunction::Delta.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 8.0).abs() < f64::EPSILON,
             "expected 8.0, got {result}"
@@ -263,7 +321,7 @@ mod tests {
     #[test]
     fn test_delta_negative() {
         let samples = vec![(0, 20.0), (1_000_000_000, 15.0), (2_000_000_000, 10.0)];
-        let result = RangeFunction::Delta.evaluate(&samples).unwrap();
+        let result = RangeFunction::Delta.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - (-10.0)).abs() < f64::EPSILON,
             "expected -10.0, got {result}"
@@ -273,7 +331,7 @@ mod tests {
     #[test]
     fn test_delta_insufficient_samples() {
         let samples = vec![(1_000_000_000, 10.0)];
-        assert!(RangeFunction::Delta.evaluate(&samples).is_none());
+        assert!(RangeFunction::Delta.evaluate(&samples, 0, None).is_none());
     }
 
     #[test]
@@ -285,7 +343,7 @@ mod tests {
             (2_000_000_000, 12.0),
             (3_000_000_000, 18.0),
         ];
-        let result = RangeFunction::Idelta.evaluate(&samples).unwrap();
+        let result = RangeFunction::Idelta.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - 6.0).abs() < f64::EPSILON,
             "expected 6.0, got {result}"
@@ -296,7 +354,7 @@ mod tests {
     fn test_idelta_negative() {
         // Last two: (2s, 10) - (1s, 15) = -5.0
         let samples = vec![(0, 20.0), (1_000_000_000, 15.0), (2_000_000_000, 10.0)];
-        let result = RangeFunction::Idelta.evaluate(&samples).unwrap();
+        let result = RangeFunction::Idelta.evaluate(&samples, 0, None).unwrap();
         assert!(
             (result - (-5.0)).abs() < f64::EPSILON,
             "expected -5.0, got {result}"
@@ -306,7 +364,7 @@ mod tests {
     #[test]
     fn test_idelta_insufficient_samples() {
         let samples = vec![(1_000_000_000, 10.0)];
-        assert!(RangeFunction::Idelta.evaluate(&samples).is_none());
+        assert!(RangeFunction::Idelta.evaluate(&samples, 0, None).is_none());
     }
 
     #[test]
@@ -317,7 +375,9 @@ mod tests {
             (2_000_000_000, 30.0),
             (3_000_000_000, 40.0),
         ];
-        let result = RangeFunction::AvgOverTime.evaluate(&samples).unwrap();
+        let result = RangeFunction::AvgOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
         assert!(
             (result - 25.0).abs() < f64::EPSILON,
             "expected 25.0, got {result}"
@@ -327,7 +387,9 @@ mod tests {
     #[test]
     fn test_avg_over_time_single_sample() {
         let samples = vec![(1_000_000_000, 42.0)];
-        let result = RangeFunction::AvgOverTime.evaluate(&samples).unwrap();
+        let result = RangeFunction::AvgOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
         assert!(
             (result - 42.0).abs() < f64::EPSILON,
             "expected 42.0, got {result}"
@@ -337,6 +399,83 @@ mod tests {
     #[test]
     fn test_avg_over_time_empty() {
         let samples: Vec<(u64, f64)> = vec![];
-        assert!(RangeFunction::AvgOverTime.evaluate(&samples).is_none());
+        assert!(
+            RangeFunction::AvgOverTime
+                .evaluate(&samples, 0, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_deriv_constant_slope() {
+        // Linear increase of 10 per second over 4 seconds.
+        let samples = vec![
+            (0, 0.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 30.0),
+            (4_000_000_000, 40.0),
+        ];
+        // Eval at t=4s
+        let result = RangeFunction::Deriv
+            .evaluate(&samples, 4_000_000_000, None)
+            .unwrap();
+        assert!((result - 10.0).abs() < 1e-9, "expected 10.0, got {result}");
+    }
+
+    #[test]
+    fn test_deriv_insufficient_samples() {
+        let samples = vec![(1_000_000_000, 10.0)];
+        assert!(
+            RangeFunction::Deriv
+                .evaluate(&samples, 1_000_000_000, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_predict_linear_basic() {
+        // Linear increase of 10 per second. Predict 10 seconds into the future.
+        // At eval time (4s), value is 40. After 10 more seconds, should be 140.
+        let samples = vec![
+            (0, 0.0),
+            (1_000_000_000, 10.0),
+            (2_000_000_000, 20.0),
+            (3_000_000_000, 30.0),
+            (4_000_000_000, 40.0),
+        ];
+        let result = RangeFunction::PredictLinear
+            .evaluate(&samples, 4_000_000_000, Some(10.0))
+            .unwrap();
+        // intercept at eval_ts (4s) = 40, slope = 10/s, predict at +10s = 40 + 100 = 140
+        assert!(
+            (result - 140.0).abs() < 1e-9,
+            "expected 140.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_predict_linear_negative_slope() {
+        // Decreasing by 5 per second.
+        let samples = vec![(0, 100.0), (1_000_000_000, 95.0), (2_000_000_000, 90.0)];
+        // Predict 20 seconds from eval time (2s).
+        // intercept at 2s = 90, slope = -5/s, predict = 90 + (-5)*20 = -10
+        let result = RangeFunction::PredictLinear
+            .evaluate(&samples, 2_000_000_000, Some(20.0))
+            .unwrap();
+        assert!(
+            (result - (-10.0)).abs() < 1e-9,
+            "expected -10.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_predict_linear_insufficient_samples() {
+        let samples = vec![(1_000_000_000, 10.0)];
+        assert!(
+            RangeFunction::PredictLinear
+                .evaluate(&samples, 1_000_000_000, Some(10.0))
+                .is_none()
+        );
     }
 }

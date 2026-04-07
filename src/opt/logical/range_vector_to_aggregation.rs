@@ -9,6 +9,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Values, co
 use datafusion::optimizer::optimizer::ApplyOrder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 
+use crate::func::RangeFunction;
 use crate::func::range_udaf::make_range_udaf;
 use crate::node::{RangeFunctionEval, RangeVectorEval};
 
@@ -53,9 +54,17 @@ impl OptimizerRule for RangeVectorToAggregation {
             return Ok(Transformed::no(plan));
         };
 
+        let func = func_eval.func;
+
+        // Functions that require the evaluation timestamp or scalar arguments
+        // (deriv, predict_linear) cannot be decomposed into a simple UDAF
+        // aggregation — keep them on the custom RangeFunctionExec path.
+        if matches!(func, RangeFunction::Deriv | RangeFunction::PredictLinear) {
+            return Ok(Transformed::no(plan));
+        }
+
         let input = eval.input.clone();
         let range_ns = eval.range_ns;
-        let func = func_eval.func;
         let label_columns = &eval.label_columns;
 
         // Use the RangeFunctionEval's output schema as the target.
