@@ -369,6 +369,14 @@ impl UserDefinedLogicalNodeCore for BinaryEval {
         cols.insert("timestamp".to_string());
         cols
     }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        // BinaryExec needs all columns from both children: timestamp, value, and
+        // all label columns are required for series matching (matching_key).
+        let lhs_indices: Vec<usize> = (0..self.lhs.schema().fields().len()).collect();
+        let rhs_indices: Vec<usize> = (0..self.rhs.schema().fields().len()).collect();
+        Some(vec![lhs_indices, rhs_indices])
+    }
 }
 
 impl PartialEq for BinaryEval {
@@ -508,6 +516,11 @@ impl UserDefinedLogicalNodeCore for ScalarBinaryEval {
         let mut cols = HashSet::new();
         cols.insert("timestamp".to_string());
         cols
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        let indices: Vec<usize> = (0..self.input.schema().fields().len()).collect();
+        Some(vec![indices])
     }
 }
 
