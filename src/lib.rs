@@ -315,7 +315,11 @@ impl PromqlEngine {
     ) -> Result<QueryResult> {
         let logical = self.planner.instant_logical_plan(query, timestamp).await?;
         let optimized = self.planner.optimize_logical_plan(logical)?;
-        let physical = self.planner.create_physical_plan(&optimized).await?;
+        let filtered = LogicalPlanBuilder::from(optimized)
+            .filter(col("value").is_not_null())
+            .and_then(|b| b.build())
+            .map_err(PromqlError::Execution)?;
+        let physical = self.planner.create_physical_plan(&filtered).await?;
         let batches = self.planner.execute(physical).await?;
         PromqlPlanner::batches_to_vector(&batches)
     }
@@ -333,7 +337,11 @@ impl PromqlEngine {
             .range_logical_plan(query, start, end, step)
             .await?;
         let optimized = self.planner.optimize_logical_plan(logical)?;
-        let with_series_agg = PromqlPlanner::add_matrix_series_aggregation(optimized)
+        let filtered = LogicalPlanBuilder::from(optimized)
+            .filter(col("value").is_not_null())
+            .and_then(|b| b.build())
+            .map_err(PromqlError::Execution)?;
+        let with_series_agg = PromqlPlanner::add_matrix_series_aggregation(filtered)
             .map_err(PromqlError::Execution)?;
         let physical = self.planner.create_physical_plan(&with_series_agg).await?;
         let batches = self.planner.execute(physical).await?;
