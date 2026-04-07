@@ -67,12 +67,26 @@ PromQL semantics that don't map to standard SQL require custom DataFusion extens
 
 | Logical node (`src/node/`) | Physical node (`src/exec/`) | Purpose |
 |---|---|---|
-| `InstantVectorEval` | `InstantVectorExec` | Step-timestamp alignment with lookback window |
-| `RangeVectorEval` | `RangeVectorExec` | Sliding window for range functions (rate, delta, etc.) |
-| `BinaryEval` | `BinaryExec` | Series matching for binary ops (`on`/`ignoring`/`group_left`/`group_right`) |
-| `AggregateEval` | `AggregateExec` | Aggregation with `by`/`without` grouping |
+| `InstantVectorEval` | `InstantVectorExec` | Single-timestamp step alignment with lookback window |
+| `StepVectorEval` | `StepVectorExec` | Multi-timestamp range query step alignment |
+| `RangeVectorEval` | `RangeVectorExec` | Sliding window sample collection for range functions |
+| `RangeFuncEval` | `RangeFuncExec` | Range function application (rate, delta, etc.) |
+| `BinaryEval` | `BinaryExec` | Vector-vector binary ops with `on`/`ignoring`/`group_left`/`group_right` |
+| `ScalarBinaryEval` | `ScalarBinaryExec` | Vector-scalar binary ops |
+| `InstantFunction` | *(lowered by optimizer)* | Instant function wrapper, converted to Projection |
+| `DateTimeFunction` | *(lowered by optimizer)* | DateTime function wrapper, converted to Projection |
 
-`InstantFuncToProjection` in `src/plan/expr.rs` is a custom DataFusion optimizer rule that converts simple instant functions (abs, ceil, etc.) into projections to avoid custom execution nodes.
+### Custom optimizer rules (`src/opt/logical/`)
+
+Seven custom DataFusion optimizer rules handle PromQL-specific plan transformations:
+
+- `InstantFuncToProjection` — Converts `InstantFunction` nodes to standard Projection nodes
+- `DateTimeFuncToProjection` — Converts `DateTimeFunction` nodes to Projection nodes
+- `RangeVectorToAggregation` — Converts `RangeVectorEval` patterns to DataFusion aggregation
+- `PushInstantEvalThroughUnion` — Pushes `InstantVectorEval` past Union nodes (important for wide→long)
+- `LiftConstantProjections` — Lifts constant expressions out of projections, flattens nested projections
+- `FoldRedundantAggregation` — Removes redundant aggregation layers
+- `RemoveNoopProjections` — Cleans up identity projections
 
 ### Plan translation (`src/plan/`)
 
@@ -81,9 +95,12 @@ PromQL semantics that don't map to standard SQL require custom DataFusion extens
 
 ### Functions (`src/func/`)
 
-- `func/range.rs`: `rate`, `irate`, `increase`, `delta` — operate on a sliding window of `(timestamp, value)` pairs
-- `func/instant.rs`: Math/trig/clamping functions — implemented as DataFusion scalar UDFs
-- `func/aggregate.rs`: Aggregation function registry
+- `func/range.rs`: `rate`, `irate`, `increase`, `delta`, `idelta`, `avg_over_time` — operate on a sliding window of `(timestamp, value)` pairs
+- `func/instant.rs` + `func/udf/`: Math (abs, ceil, floor, round, sqrt, exp, ln, log2, log10, sgn), trig (sin, cos, tan, asin, acos, atan + hyperbolic variants), clamping (clamp, clamp_min, clamp_max), deg, rad — implemented as DataFusion scalar UDFs
+- `func/aggregate.rs`: `sum`, `avg`, `count`, `min`, `max`, `stddev`, `stdvar`, `group`, `topk`, `bottomk`, `quantile`, `count_values`, `limitk`, `limit_ratio`
+- `func/datetime.rs`: `time`, `timestamp`, `day_of_month`, `day_of_week`, `day_of_year`, `days_in_month`, `hour`, `minute`, `month`, `year`
+- `func/label.rs`: `label_replace`, `label_join`
+- `func/sort.rs`: `sort`, `sort_desc`, `sort_by_label`, `sort_by_label_desc`
 
 ### Data format detail
 
@@ -92,9 +109,10 @@ The Rezolus parquet test data (`data/metrics.parquet`) has ~950 columns in wide 
 ### What's not yet implemented
 
 See `.claude/plans/functions.md` for the full list. Notable gaps:
-- Range functions: `avg_over_time`, `deriv`, `predict_linear`, `*_over_time` variants
-- Aggregators: `topk`, `bottomk`, `quantile`, `stddev`, `stdvar`
-- Modifiers: `@` (fixed timestamp), `bool` on comparisons
+- Range functions: `deriv`, `predict_linear`, `sum_over_time`, `count_over_time`, `min_over_time`, `max_over_time`, `stddev_over_time`, `stdvar_over_time`, `quantile_over_time`, `last_over_time`, `present_over_time`, `changes`, `resets`, `absent_over_time`
+- Instant functions: `scalar`, `vector`, `absent`, `pi`
+- Histogram: `histogram_quantile`
+- Modifiers: `@` (fixed timestamp)
 - Subqueries
 
 ## Testing approach
