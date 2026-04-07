@@ -19,6 +19,8 @@ pub(crate) enum RangeFunction {
     Deriv,
     /// Predict value t seconds in the future using simple linear regression.
     PredictLinear,
+    /// Count of all samples in the range.
+    CountOverTime,
 }
 
 impl fmt::Display for RangeFunction {
@@ -32,6 +34,7 @@ impl fmt::Display for RangeFunction {
             Self::AvgOverTime => write!(f, "avg_over_time"),
             Self::Deriv => write!(f, "deriv"),
             Self::PredictLinear => write!(f, "predict_linear"),
+            Self::CountOverTime => write!(f, "count_over_time"),
         }
     }
 }
@@ -47,6 +50,7 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
         "avg_over_time" => Some(RangeFunction::AvgOverTime),
         "deriv" => Some(RangeFunction::Deriv),
         "predict_linear" => Some(RangeFunction::PredictLinear),
+        "count_over_time" => Some(RangeFunction::CountOverTime),
         _ => None,
     }
 }
@@ -71,9 +75,15 @@ impl RangeFunction {
         }
 
         // Functions that only need 1 sample.
-        if let Self::AvgOverTime = self {
-            let sum: f64 = samples.iter().map(|(_, v)| v).sum();
-            return Some(sum / samples.len() as f64);
+        match self {
+            Self::AvgOverTime => {
+                let sum: f64 = samples.iter().map(|(_, v)| v).sum();
+                return Some(sum / samples.len() as f64);
+            }
+            Self::CountOverTime => {
+                return Some(samples.len() as f64);
+            }
+            _ => {}
         }
 
         // All remaining functions need at least 2 samples.
@@ -121,7 +131,7 @@ impl RangeFunction {
                 let (_, last_val) = samples[n - 1];
                 Some(last_val - prev_val)
             }
-            Self::AvgOverTime => unreachable!(),
+            Self::AvgOverTime | Self::CountOverTime => unreachable!(),
             Self::Deriv => {
                 let (_intercept, slope) = linear_regression(samples, eval_ts_ns);
                 Some(slope)

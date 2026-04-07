@@ -623,6 +623,72 @@ async fn test_range_query_avg_over_time() {
     }
 }
 
+// ---- count_over_time ----
+
+#[tokio::test]
+async fn test_instant_query_count_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // count_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: samples at 0,1,2,3,4,5s -> 6 samples
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("count_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1, "expected 1 series");
+            assert!(
+                (samples[0].value - 6.0).abs() < f64::EPSILON,
+                "expected count 6.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_count_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // count_over_time(temperature[3s]) over [3s, 6s] step 3s
+    // gauge_values: 20, 22, 25, 23, 21, 24, 26 (at 0..6s)
+    // At t=3s: window [0s,3s] -> samples at 0,1,2,3s -> 4 samples
+    // At t=6s: window [3s,6s] -> samples at 3,4,5,6s -> 4 samples
+    let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
+    let step = std::time::Duration::from_secs(3);
+
+    let result = engine
+        .range_query("count_over_time(temperature[3s])", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1, "expected 1 series");
+            assert_eq!(series[0].samples.len(), 2, "expected 2 steps");
+
+            assert!(
+                (series[0].samples[0].1 - 4.0).abs() < f64::EPSILON,
+                "expected count 4.0 at t=3s, got {}",
+                series[0].samples[0].1
+            );
+            assert!(
+                (series[0].samples[1].1 - 4.0).abs() < f64::EPSILON,
+                "expected count 4.0 at t=6s, got {}",
+                series[0].samples[1].1
+            );
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
 // ---- predict_linear / deriv ----
 
 /// A gauge with perfectly linear data: value = 10 + 2*t_seconds.
