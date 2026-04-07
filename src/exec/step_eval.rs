@@ -13,8 +13,6 @@ use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
-use super::label_timestamp_ordering;
-
 /// Physical plan node that aligns raw samples to a range of step timestamps
 /// using the lookback window.
 ///
@@ -104,10 +102,7 @@ impl ExecutionPlan for StepVectorExec {
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        vec![label_timestamp_ordering(
-            &self.label_columns,
-            &self.child.schema(),
-        )]
+        vec![None]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
