@@ -4,9 +4,7 @@ use chrono::DateTime;
 use clap::Parser;
 
 use datafusion_promql::PromqlPlanner;
-use datafusion_promql::parquet::{
-    ParquetMetricSource, load_schema, read_schema, read_timestamp_range, write_schema,
-};
+use datafusion_promql::parquet::{ParquetMetricSource, read_timestamp_range};
 use datafusion_promql::types::TimeRange;
 
 #[derive(Parser)]
@@ -48,13 +46,6 @@ struct Cli {
     /// Show the physical plan
     #[arg(long)]
     physical: bool,
-
-    /// Path to a schema cache file (Arrow IPC format).
-    /// On first use, the schema is read from the parquet file and saved here.
-    /// On subsequent uses, the schema is loaded from this file — much faster
-    /// for wide parquet files with many columns.
-    #[arg(long)]
-    schema_cache: Option<String>,
 }
 
 #[tokio::main]
@@ -72,20 +63,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Auto-detect timestamp range from parquet metadata when not provided.
     let (auto_min_ns, auto_max_ns) = read_timestamp_range(&cli.file)?;
 
-    let source = Arc::new(if let Some(cache_path) = &cli.schema_cache {
-        let schema = if std::path::Path::new(cache_path).exists() {
-            eprintln!("Loading schema from cache: {cache_path}");
-            load_schema(cache_path)?
-        } else {
-            eprintln!("Reading schema from parquet and saving to cache: {cache_path}");
-            let s = read_schema(&cli.file)?;
-            write_schema(&s, cache_path)?;
-            s
-        };
-        ParquetMetricSource::try_new_with_schema(&cli.file, schema).await?
-    } else {
-        ParquetMetricSource::try_new(&cli.file).await?
-    });
+    let source = Arc::new(ParquetMetricSource::try_new(&cli.file).await?);
     let planner = PromqlPlanner::new(source.clone());
 
     const NS_PER_SEC: u64 = 1_000_000_000;

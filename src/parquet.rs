@@ -4,8 +4,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::ipc::reader::FileReader as IpcFileReader;
-use arrow::ipc::writer::FileWriter as IpcFileWriter;
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
@@ -52,9 +50,8 @@ impl ParquetMetricSource {
     ///
     /// [`try_new`](Self::try_new) calls this internally after extracting the
     /// schema with [`read_schema`] (which skips row-group statistics).  Use
-    /// this directly when you want to supply a schema cached by
-    /// [`write_schema`]/[`load_schema`] to avoid even the statistics-skipped
-    /// footer read on startup.
+    /// this directly when you already have the schema from a previous
+    /// [`read_schema`] call and want to avoid reading the footer again.
     pub async fn try_new_with_schema(path: impl AsRef<Path>, schema: Arc<Schema>) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
 
@@ -279,8 +276,7 @@ fn build_metric_metadata(
 ///
 /// The returned schema can be passed to
 /// [`ParquetMetricSource::try_new_with_schema`] to avoid re-reading the
-/// footer during DataFusion registration, or persisted between runs with
-/// [`write_schema`]/[`load_schema`].
+/// footer during DataFusion registration.
 pub fn read_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
     let file = File::open(path.as_ref())
         .map_err(|e| PromqlError::DataSource(format!("failed to open parquet file: {e}")))?;
@@ -302,29 +298,6 @@ pub fn read_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
     let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
         .map_err(|e| PromqlError::DataSource(format!("failed to read parquet schema: {e}")))?;
     Ok(Arc::clone(builder.schema()))
-}
-
-/// Serialize an Arrow `schema` to a binary Arrow IPC file at `path`.
-///
-/// The file contains an empty record batch — no row data — so it is small and
-/// fast to write.  Use [`load_schema`] to restore it.
-pub fn write_schema(schema: &Schema, path: impl AsRef<Path>) -> Result<()> {
-    let file = File::create(path.as_ref())
-        .map_err(|e| PromqlError::DataSource(format!("failed to create schema cache: {e}")))?;
-    let mut writer = IpcFileWriter::try_new(file, schema)
-        .map_err(|e| PromqlError::DataSource(format!("failed to init IPC writer: {e}")))?;
-    writer
-        .finish()
-        .map_err(|e| PromqlError::DataSource(format!("failed to write schema cache: {e}")))
-}
-
-/// Load an Arrow schema previously saved by [`write_schema`].
-pub fn load_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
-    let file = File::open(path.as_ref())
-        .map_err(|e| PromqlError::DataSource(format!("failed to open schema cache: {e}")))?;
-    let reader = IpcFileReader::try_new(file, None)
-        .map_err(|e| PromqlError::DataSource(format!("failed to read schema cache: {e}")))?;
-    Ok(reader.schema())
 }
 
 /// Read the min and max `timestamp` values from parquet row-group statistics.
