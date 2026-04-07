@@ -120,6 +120,11 @@ pub(crate) fn normalize_wide_to_long(
         cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp")
     };
 
+    // Pre-compute the timestamp column index (shared across all branches).
+    let ts_col_idx = schema
+        .index_of(mapping.timestamp_column.as_str())
+        .map_err(|e| PromqlError::Plan(format!("timestamp column not found: {e}")))?;
+
     let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
     for (idx, mc) in matched.iter().enumerate() {
         let mut exprs = vec![
@@ -142,13 +147,25 @@ pub(crate) fn normalize_wide_to_long(
             exprs.push(lit(val).alias(key.as_str()));
         }
 
+        // Project only the two physical columns this branch needs: timestamp
+        // and the one value column. All other label columns are constant
+        // literals in the Projection above, so the parquet reader never has
+        // to decode them. This keeps each scan's schema small (2 columns
+        // instead of all C columns in the file), which dramatically reduces
+        // the size of the unoptimized logical plan and avoids O(M × C) output
+        // when the plan is displayed.
+        let value_col_idx = schema
+            .index_of(mc.col_name.as_str())
+            .map_err(|e| PromqlError::Plan(format!("column '{}' not found: {e}", mc.col_name)))?;
+        let projection = Some(vec![ts_col_idx, value_col_idx]);
+
         // Use a unique alias per branch so the optimizer treats each scan as
         // distinct (avoids CSE merging identical-looking table scans).
         let scan_alias = format!("{metric_name}_{idx}");
         let plan = LogicalPlanBuilder::scan_with_filters(
             scan_alias,
             provider_as_source(Arc::clone(&provider)),
-            None,
+            projection,
             vec![],
         )
         .map_err(|e| PromqlError::Plan(format!("failed to build scan: {e}")))?
