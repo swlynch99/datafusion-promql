@@ -41,7 +41,10 @@ pub(crate) struct RangeVectorExec {
 }
 
 /// Build the output Arrow schema for the windowing node.
-fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
+///
+/// Label column nullability is inherited from the child schema so the physical
+/// output matches the logical schema derived by [`RangeVectorEval`].
+fn compute_output_schema(child_schema: &SchemaRef, label_columns: &[String]) -> SchemaRef {
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new(
@@ -56,7 +59,11 @@ fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
         ),
     ];
     for label in label_columns {
-        fields.push(Field::new(label, DataType::Utf8, true));
+        let nullable = child_schema
+            .field_with_name(label)
+            .map(|f| f.is_nullable())
+            .unwrap_or(true);
+        fields.push(Field::new(label, DataType::Utf8, nullable));
     }
     Arc::new(Schema::new(fields))
 }
@@ -74,7 +81,7 @@ impl RangeVectorExec {
         label_columns: Vec<String>,
         at_timestamp_ns: Option<u64>,
     ) -> Self {
-        let output_schema = compute_output_schema(&label_columns);
+        let output_schema = compute_output_schema(&child.schema(), &label_columns);
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&output_schema)),
             Partitioning::UnknownPartitioning(1),

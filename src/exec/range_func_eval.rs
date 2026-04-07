@@ -33,13 +33,20 @@ pub(crate) struct RangeFunctionExec {
 }
 
 /// Build the output schema: timestamp, value, label columns.
-fn compute_output_schema(label_columns: &[String]) -> SchemaRef {
+///
+/// Label column nullability is inherited from the child schema so the physical
+/// output matches the logical schema derived by [`RangeFunctionEval`].
+fn compute_output_schema(child_schema: &arrow::datatypes::SchemaRef, label_columns: &[String]) -> SchemaRef {
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, true),
     ];
     for label in label_columns {
-        fields.push(Field::new(label, DataType::Utf8, true));
+        let nullable = child_schema
+            .field_with_name(label)
+            .map(|f| f.is_nullable())
+            .unwrap_or(true);
+        fields.push(Field::new(label, DataType::Utf8, nullable));
     }
     Arc::new(Schema::new(fields))
 }
@@ -51,7 +58,7 @@ impl RangeFunctionExec {
         scalar_arg: Option<f64>,
         label_columns: Vec<String>,
     ) -> Self {
-        let output_schema = compute_output_schema(&label_columns);
+        let output_schema = compute_output_schema(&child.schema(), &label_columns);
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&output_schema)),
             Partitioning::UnknownPartitioning(1),
