@@ -18,13 +18,13 @@ use arrow::array::{AsArray, ListArray};
 use arrow::datatypes::UInt64Type;
 use chrono::{DateTime, Utc};
 use datafusion::execution::SessionStateBuilder;
-use datafusion::logical_expr::expr::Sort;
+use datafusion::functions_aggregate::array_agg::array_agg_udaf;
 use datafusion::logical_expr::expr::AggregateFunction as DFAggregateFunction;
+use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, col};
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
 use datafusion::prelude::*;
-use datafusion::functions_aggregate::array_agg::array_agg_udaf;
 
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
@@ -401,9 +401,7 @@ fn extract_row(batch: &arrow::record_batch::RecordBatch, row: usize) -> Result<(
 ///
 /// The resulting plan schema is `(label…, timestamps: List<UInt64>, values:
 /// List<Float64>)` — one row per unique label set.
-fn aggregate_by_label_series(
-    plan: LogicalPlan,
-) -> datafusion::error::Result<LogicalPlan> {
+fn aggregate_by_label_series(plan: LogicalPlan) -> datafusion::error::Result<LogicalPlan> {
     let schema = plan.schema();
 
     // Collect label column names — everything except timestamp and value.

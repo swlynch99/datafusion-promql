@@ -36,7 +36,10 @@ pub(crate) struct RangeFunctionExec {
 ///
 /// Label column nullability is inherited from the child schema so the physical
 /// output matches the logical schema derived by [`RangeFunctionEval`].
-fn compute_output_schema(child_schema: &arrow::datatypes::SchemaRef, label_columns: &[String]) -> SchemaRef {
+fn compute_output_schema(
+    child_schema: &arrow::datatypes::SchemaRef,
+    label_columns: &[String],
+) -> SchemaRef {
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, true),
