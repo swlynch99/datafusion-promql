@@ -31,7 +31,7 @@ struct Cli {
     #[arg(long, conflicts_with = "timestamp")]
     end: Option<i64>,
 
-    /// Step duration in seconds (for range queries, default: 15)
+    /// Step duration in seconds (for range queries, default: 1)
     #[arg(long, conflicts_with = "timestamp")]
     step: Option<u64>,
 
@@ -106,11 +106,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
         let start_ns = auto_min_ns;
         let end_ns = auto_max_ns;
-        let step_ns = 15 * NS_PER_SEC;
+        let step_ns = NS_PER_SEC;
 
         let start = DateTime::from_timestamp_nanos(start_ns as i64);
         let end = DateTime::from_timestamp_nanos(end_ns as i64);
-        eprintln!("No timestamp specified; using file range: {start} .. {end} step 15s");
+        eprintln!("No timestamp specified; using file range: {start} .. {end} step 1s");
 
         let time_range = TimeRange {
             start_ns: Some(start_ns),
