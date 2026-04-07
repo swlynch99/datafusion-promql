@@ -142,6 +142,7 @@ pub(crate) async fn plan_vector_selector(
                 &mapping,
                 metric_name,
                 &ds_matchers,
+                &expanded_range,
             )?;
 
             // Apply time range filter (if bounded) on the normalized output.
