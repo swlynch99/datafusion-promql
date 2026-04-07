@@ -49,7 +49,7 @@ fn terminal_dimensions() -> (u32, u32) {
         .map(|(w, h)| (w.0 as u32, h.0 as u32))
         .unwrap_or((120, 40));
     // Reserve some rows for the legend/labels printed below the chart.
-    (w, h.saturating_sub(10).max(10))
+    (w, h.saturating_sub(10).max(10) * 3)
 }
 
 /// Format a label set into a compact series name like `{instance="host1", job="node"}`.
