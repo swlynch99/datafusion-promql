@@ -54,6 +54,7 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(crate::opt::logical::RangeVectorToAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::PushInstantEvalThroughUnion))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LiftConstantProjections))
+            .with_optimizer_rule(Arc::new(crate::opt::logical::FoldRedundantAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RemoveNoopProjections))
             .build();
         let ctx = SessionContext::new_with_state(state);
