@@ -100,10 +100,29 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         };
         datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
     } else {
-        // No timestamp flags: default to instant query at the max timestamp.
-        let timestamp = DateTime::from_timestamp_nanos(auto_max_ns as i64);
-        eprintln!("No timestamp specified; using max from parquet metadata: {timestamp}");
-        planner.instant_logical_plan(&cli.query, timestamp).await?
+        // No timestamp flags: default to range query over the full file range.
+        let expr =
+            promql_parser::parser::parse(&cli.query).map_err(|e| format!("parse error: {e}"))?;
+
+        let start_ns = auto_min_ns;
+        let end_ns = auto_max_ns;
+        let step_ns = NS_PER_SEC;
+
+        let start = DateTime::from_timestamp_nanos(start_ns as i64);
+        let end = DateTime::from_timestamp_nanos(end_ns as i64);
+        eprintln!("No timestamp specified; using file range: {start} .. {end} step 1s");
+
+        let time_range = TimeRange {
+            start_ns: Some(start_ns),
+            end_ns: Some(end_ns),
+        };
+        let params = datafusion_promql::plan::EvalParams {
+            eval_ts_ns: None,
+            start_ns,
+            end_ns,
+            step_ns,
+        };
+        datafusion_promql::plan::plan_expr(&expr, source.as_ref(), time_range, params).await?
     };
 
     if show_logical {
