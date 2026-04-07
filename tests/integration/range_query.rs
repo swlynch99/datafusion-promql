@@ -623,6 +623,137 @@ async fn test_range_query_avg_over_time() {
     }
 }
 
+// ---- predict_linear / deriv ----
+
+/// A gauge with perfectly linear data: value = 10 + 2*t_seconds.
+/// Samples at 1s intervals from t=0 to t=10s.
+fn make_linear_gauge_source() -> InMemoryMetricSource {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("__name__", DataType::Utf8, false),
+        Field::new("timestamp", DataType::UInt64, false),
+        Field::new("value", DataType::Float64, false),
+        Field::new("sensor", DataType::Utf8, false),
+    ]));
+
+    let n = 11; // 0..=10 seconds
+    let mut names = Vec::with_capacity(n);
+    let mut timestamps = Vec::with_capacity(n);
+    let mut values = Vec::with_capacity(n);
+    let mut sensors = Vec::with_capacity(n);
+
+    for i in 0..n {
+        names.push("cpu_temp");
+        timestamps.push((i as u64) * 1_000_000_000);
+        values.push(10.0 + 2.0 * i as f64); // 10, 12, 14, 16, ...
+        sensors.push("node1");
+    }
+
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(StringArray::from(names)),
+            Arc::new(UInt64Array::from(timestamps)),
+            Arc::new(Float64Array::from(values)),
+            Arc::new(StringArray::from(sensors)),
+        ],
+    )
+    .expect("failed to create test batch");
+
+    InMemoryMetricSource::new(schema, vec![batch])
+}
+
+#[tokio::test]
+async fn test_instant_query_predict_linear() {
+    let source = make_linear_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // predict_linear(cpu_temp[5s], 10) at t=10s
+    // Window [5s, 10s]: samples at 5s,6s,7s,8s,9s,10s -> values 20,22,24,26,28,30
+    // Perfect linear fit: slope = 2.0/s, intercept at t=10s = 30.0
+    // Predict at t=10+10=20s: 30 + 2*10 = 50.0
+    let ts = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
+    let result = engine
+        .instant_query("predict_linear(cpu_temp[5s], 10)", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1, "expected 1 series");
+            assert!(
+                (samples[0].value - 50.0).abs() < 1e-9,
+                "expected predict_linear = 50.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_deriv() {
+    let source = make_linear_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // deriv(cpu_temp[5s]) at t=10s
+    // Window [5s, 10s]: values 20,22,24,26,28,30
+    // Perfect linear fit: slope = 2.0/s
+    let ts = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
+    let result = engine
+        .instant_query("deriv(cpu_temp[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1, "expected 1 series");
+            assert!(
+                (samples[0].value - 2.0).abs() < 1e-9,
+                "expected deriv = 2.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_predict_linear() {
+    let source = make_linear_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // predict_linear(cpu_temp[3s], 5) over [5s, 10s] step 5s
+    // At t=5s: window [2s,5s] -> values 14,16,18,20 -> slope=2, intercept@5s=20 -> predict=20+2*5=30
+    // At t=10s: window [7s,10s] -> values 24,26,28,30 -> slope=2, intercept@10s=30 -> predict=30+2*5=40
+    let start = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(10_000).unwrap();
+    let step = Duration::from_secs(5);
+
+    let result = engine
+        .range_query("predict_linear(cpu_temp[3s], 5)", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1, "expected 1 series");
+            assert_eq!(series[0].samples.len(), 2, "expected 2 steps");
+
+            assert!(
+                (series[0].samples[0].1 - 30.0).abs() < 1e-9,
+                "expected 30.0 at t=5s, got {}",
+                series[0].samples[0].1
+            );
+            assert!(
+                (series[0].samples[1].1 - 40.0).abs() < 1e-9,
+                "expected 40.0 at t=10s, got {}",
+                series[0].samples[1].1
+            );
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
 // ---- Error cases ----
 
 #[tokio::test]

@@ -23,6 +23,8 @@ pub(crate) struct RangeFunctionEval {
     pub input: LogicalPlan,
     /// The range function to apply to each window.
     pub func: RangeFunction,
+    /// Extra scalar argument (e.g. `t` for `predict_linear`).
+    pub scalar_arg: Option<f64>,
     /// Output schema: timestamp, value, label columns.
     pub output_schema: DFSchemaRef,
 }
@@ -57,11 +59,12 @@ fn compute_output_schema(input: &LogicalPlan) -> Result<DFSchemaRef> {
 }
 
 impl RangeFunctionEval {
-    pub fn new(input: LogicalPlan, func: RangeFunction) -> Result<Self> {
+    pub fn new(input: LogicalPlan, func: RangeFunction, scalar_arg: Option<f64>) -> Result<Self> {
         let output_schema = compute_output_schema(&input)?;
         Ok(Self {
             input,
             func,
+            scalar_arg,
             output_schema,
         })
     }
@@ -96,6 +99,7 @@ impl UserDefinedLogicalNodeCore for RangeFunctionEval {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
             func: self.func,
+            scalar_arg: self.scalar_arg,
             output_schema: Arc::clone(&self.output_schema),
         })
     }

@@ -26,6 +26,7 @@ use crate::func::RangeFunction;
 pub(crate) struct RangeFunctionExec {
     child: Arc<dyn ExecutionPlan>,
     func: RangeFunction,
+    scalar_arg: Option<f64>,
     label_columns: Vec<String>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
@@ -47,6 +48,7 @@ impl RangeFunctionExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
         func: RangeFunction,
+        scalar_arg: Option<f64>,
         label_columns: Vec<String>,
     ) -> Self {
         let output_schema = compute_output_schema(&label_columns);
@@ -59,6 +61,7 @@ impl RangeFunctionExec {
         Self {
             child,
             func,
+            scalar_arg,
             label_columns,
             output_schema,
             properties,
@@ -111,6 +114,7 @@ impl ExecutionPlan for RangeFunctionExec {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             self.func,
+            self.scalar_arg,
             self.label_columns.clone(),
         )))
     }
@@ -123,6 +127,7 @@ impl ExecutionPlan for RangeFunctionExec {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let output_schema = Arc::clone(&self.output_schema);
         let func = self.func;
+        let scalar_arg = self.scalar_arg;
         let label_columns = self.label_columns.clone();
 
         let stream = futures::stream::once(async move {
@@ -186,7 +191,7 @@ impl ExecutionPlan for RangeFunctionExec {
                         .map(|(&t, &v)| (t, v))
                         .collect();
 
-                    if let Some(value) = func.evaluate(&samples) {
+                    if let Some(value) = func.evaluate(&samples, ts_arr.value(row), scalar_arg) {
                         out_ts.append_value(ts_arr.value(row));
                         out_val.append_value(value);
                         for (i, label_arr) in label_arrays.iter().enumerate() {
