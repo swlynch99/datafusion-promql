@@ -99,11 +99,7 @@ impl OptimizerRule for LiftConstantProjections {
                 rewrite_instant_vector_eval(plan)
             }
             LogicalPlan::Extension(ext)
-                if ext
-                    .node
-                    .as_any()
-                    .downcast_ref::<StepVectorEval>()
-                    .is_some() =>
+                if ext.node.as_any().downcast_ref::<StepVectorEval>().is_some() =>
             {
                 rewrite_step_vector_eval(plan)
             }
