@@ -3,10 +3,11 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 use datafusion::prelude::*;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -33,12 +34,30 @@ pub struct ParquetMetricSource {
 
 impl ParquetMetricSource {
     /// Create a new source from a parquet file at `path`.
+    ///
+    /// This reads the Arrow schema from the parquet file footer (skipping row
+    /// group statistics to avoid unnecessary work) and then registers the table
+    /// with DataFusion using the pre-built schema, bypassing DataFusion's own
+    /// schema-inference pass.
     pub async fn try_new(path: impl AsRef<Path>) -> Result<Self> {
+        let schema = read_schema(path.as_ref())?;
+        Self::try_new_with_schema(path, schema).await
+    }
+
+    /// Create a new source from a parquet file at `path`, using a pre-built
+    /// Arrow `schema` instead of inferring it from the file.
+    ///
+    /// [`try_new`](Self::try_new) calls this internally after extracting the
+    /// schema with [`read_schema`] (which skips row-group statistics).  Use
+    /// this directly when you already have the schema from a previous
+    /// [`read_schema`] call and want to avoid reading the footer again.
+    pub async fn try_new_with_schema(path: impl AsRef<Path>, schema: Arc<Schema>) -> Result<Self> {
         let path_str = path.as_ref().to_string_lossy().to_string();
 
         let ctx = SessionContext::new();
         let parquet_options = ParquetReadOptions {
             file_sort_order: vec![vec![col("timestamp").sort(true, false)]],
+            schema: Some(schema.as_ref()),
             ..Default::default()
         };
         ctx.register_parquet("__parquet_src", &path_str, parquet_options)
@@ -51,8 +70,6 @@ impl ParquetMetricSource {
             .map_err(|e| PromqlError::DataSource(format!("failed to get table provider: {e}")))?;
 
         let column_mapping = rezolus_column_mapping();
-
-        // Build metric metadata from the schema.
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
 
         Ok(Self {
@@ -245,6 +262,25 @@ fn build_metric_metadata(
             extra_columns: vec![],
         })
         .collect()
+}
+
+/// Read the Arrow schema from a parquet file's footer metadata.
+///
+/// The returned schema can be passed to
+/// [`ParquetMetricSource::try_new_with_schema`] to avoid re-reading the
+/// footer during DataFusion registration.
+pub fn read_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
+    let file = File::open(path.as_ref())
+        .map_err(|e| PromqlError::DataSource(format!("failed to open parquet file: {e}")))?;
+    // Skip Arrow IPC field metadata to match DataFusion's default `skip_metadata = true`
+    // behaviour.  The parquet column names carry all the information we need for
+    // `rezolus_parse_column`; retaining the Arrow-level metadata can produce
+    // unexpected label keys when the file uses different key names than our
+    // parsing conventions expect.
+    let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+    let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+        .map_err(|e| PromqlError::DataSource(format!("failed to read parquet schema: {e}")))?;
+    Ok(Arc::clone(builder.schema()))
 }
 
 /// Read the min and max `timestamp` values from parquet row-group statistics.
