@@ -108,7 +108,7 @@ The Rezolus parquet test data (`data/metrics.parquet`) has ~950 columns in wide 
 
 ### What's not yet implemented
 
-See `.claude/plans/functions.md` for the full list. Notable gaps:
+See `plans/functions.md` for the full list. Notable gaps:
 - Range functions: `deriv`, `predict_linear`, `sum_over_time`, `count_over_time`, `min_over_time`, `max_over_time`, `stddev_over_time`, `stdvar_over_time`, `quantile_over_time`, `last_over_time`, `present_over_time`, `changes`, `resets`, `absent_over_time`
 - Instant functions: `scalar`, `vector`, `absent`, `pi`
 - Histogram: `histogram_quantile`
