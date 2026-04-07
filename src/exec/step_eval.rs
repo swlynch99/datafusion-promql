@@ -8,7 +8,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
@@ -101,8 +101,10 @@ impl ExecutionPlan for StepVectorExec {
         vec![Distribution::SinglePartition]
     }
 
-    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
-        vec![None]
+    fn required_input_ordering(
+        &self,
+    ) -> Vec<Option<datafusion::physical_expr::OrderingRequirements>> {
+        vec![super::label_timestamp_ordering(&[], &self.child.schema())]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -187,10 +189,8 @@ impl ExecutionPlan for StepVectorExec {
                 }
             }
 
-            // Sort each series by timestamp.
-            for samples in series_map.values_mut() {
-                samples.sort_by_key(|(ts, _)| *ts);
-            }
+            // Input is required to be sorted by timestamp, so each
+            // series bucket is already in timestamp order.
 
             // For each eval timestamp and each series, find the most recent
             // sample within [eval_ts - lookback, eval_ts].
