@@ -55,6 +55,7 @@ fn wrap_instant_eval(input: LogicalPlan, label_columns: Vec<String>) -> LogicalP
         300_000_000_000, // 5min lookback
         0,
         label_columns,
+        None,
     );
     LogicalPlan::Extension(Extension {
         node: Arc::new(eval),
@@ -285,6 +286,7 @@ fn test_push_down_preserves_parameters() {
         60_000_000_000,
         10_000_000_000,
         vec!["job".to_string()],
+        None,
     );
     let plan = LogicalPlan::Extension(Extension {
         node: Arc::new(eval),

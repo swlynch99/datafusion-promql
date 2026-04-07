@@ -34,6 +34,8 @@ pub(crate) struct RangeVectorExec {
     step_ns: u64,
     offset_ns: i64,
     label_columns: Vec<String>,
+    /// Fixed lookup timestamp from the `@` modifier (ns).
+    at_timestamp_ns: Option<u64>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
 }
@@ -70,6 +72,7 @@ impl RangeVectorExec {
         step_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
+        at_timestamp_ns: Option<u64>,
     ) -> Self {
         let output_schema = compute_output_schema(&label_columns);
         let properties = Arc::new(PlanProperties::new(
@@ -87,6 +90,7 @@ impl RangeVectorExec {
             step_ns,
             offset_ns,
             label_columns,
+            at_timestamp_ns,
             output_schema,
             properties,
         }
@@ -157,6 +161,7 @@ impl ExecutionPlan for RangeVectorExec {
             self.step_ns,
             self.offset_ns,
             self.label_columns.clone(),
+            self.at_timestamp_ns,
         )))
     }
 
@@ -171,6 +176,7 @@ impl ExecutionPlan for RangeVectorExec {
         let range_ns = self.range_ns;
         let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
+        let at_timestamp_ns = self.at_timestamp_ns;
 
         let stream = futures::stream::once(async move {
             use futures::StreamExt;
@@ -237,9 +243,10 @@ impl ExecutionPlan for RangeVectorExec {
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
             for &eval_ts in &eval_timestamps {
-                // Apply offset: shift the lookup window into the past by offset_ns.
-                // The result is reported at eval_ts.
-                let effective_ts = (eval_ts as i64 - offset_ns) as u64;
+                // When the @ modifier is set, use that timestamp for lookup
+                // instead of the eval timestamp. Offset is applied on top.
+                let lookup_ts = at_timestamp_ns.unwrap_or(eval_ts);
+                let effective_ts = (lookup_ts as i64 - offset_ns) as u64;
                 let window_start = effective_ts.saturating_sub(range_ns);
                 for (key, samples) in &series_map {
                     // Find samples within [window_start, effective_ts].

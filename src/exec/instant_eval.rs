@@ -28,6 +28,8 @@ pub(crate) struct InstantVectorExec {
     lookback_ns: u64,
     offset_ns: i64,
     label_columns: Vec<String>,
+    /// Fixed lookup timestamp from the `@` modifier (ns).
+    at_timestamp_ns: Option<u64>,
     properties: Arc<PlanProperties>,
 }
 
@@ -38,6 +40,7 @@ impl InstantVectorExec {
         lookback_ns: u64,
         offset_ns: i64,
         label_columns: Vec<String>,
+        at_timestamp_ns: Option<u64>,
     ) -> Self {
         let schema = child.schema();
         let properties = Arc::new(PlanProperties::new(
@@ -52,6 +55,7 @@ impl InstantVectorExec {
             lookback_ns,
             offset_ns,
             label_columns,
+            at_timestamp_ns,
             properties,
         }
     }
@@ -104,6 +108,7 @@ impl ExecutionPlan for InstantVectorExec {
             self.lookback_ns,
             self.offset_ns,
             self.label_columns.clone(),
+            self.at_timestamp_ns,
         )))
     }
 
@@ -118,6 +123,7 @@ impl ExecutionPlan for InstantVectorExec {
         let lookback_ns = self.lookback_ns;
         let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
+        let at_timestamp_ns = self.at_timestamp_ns;
 
         let stream = futures::stream::once(async move {
             // Collect all batches from the child stream.
@@ -180,10 +186,10 @@ impl ExecutionPlan for InstantVectorExec {
             let mut out_labels: Vec<StringBuilder> =
                 label_columns.iter().map(|_| StringBuilder::new()).collect();
 
-            // Apply offset: shift the lookup window into the past by offset_ns.
-            // The effective lookup time is eval_ts - offset_ns, but the
-            // result is reported at eval_ts.
-            let effective_ts = (eval_ts as i64 - offset_ns) as u64;
+            // When the @ modifier is set, use that timestamp for lookup instead
+            // of the eval timestamp. Offset is applied on top of the @ timestamp.
+            let lookup_ts = at_timestamp_ns.unwrap_or(eval_ts);
+            let effective_ts = (lookup_ts as i64 - offset_ns) as u64;
             let window_start = effective_ts.saturating_sub(lookback_ns);
             for (key, samples) in &series_map {
                 // Binary search for the last sample <= effective_ts.

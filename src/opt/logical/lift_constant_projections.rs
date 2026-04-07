@@ -322,6 +322,7 @@ fn rewrite_instant_vector_eval(plan: LogicalPlan) -> Result<Transformed<LogicalP
         eval.lookback_ns,
         eval.offset_ns,
         new_label_columns,
+        eval.at_timestamp_ns,
     );
     let eval_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(new_eval),

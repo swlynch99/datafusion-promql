@@ -9,7 +9,7 @@ use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, WindowFrame, WindowFrameBound, WindowFrameUnits,
     cast, col, lit,
 };
-use promql_parser::parser::ast::Offset;
+use promql_parser::parser::ast::{AtModifier, Offset};
 use promql_parser::parser::{self, Expr, LabelModifier};
 
 use arrow::array::{Float64Array, UInt64Array};
@@ -40,6 +40,25 @@ fn offset_to_ns(offset: &Option<Offset>) -> i64 {
         Some(Offset::Pos(dur)) => dur.as_nanos() as i64,
         Some(Offset::Neg(dur)) => -(dur.as_nanos() as i64),
         None => 0,
+    }
+}
+
+/// Resolve the `@` modifier to a fixed timestamp in nanoseconds.
+///
+/// - `@ <timestamp>`: fixed Unix timestamp (seconds) → convert to ns
+/// - `@ start()`: use the query start time
+/// - `@ end()`: use the query end time
+fn resolve_at_modifier(at: &Option<AtModifier>, params: &EvalParams) -> Option<u64> {
+    match at {
+        Some(AtModifier::At(system_time)) => {
+            let duration = system_time
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("@ timestamp before UNIX epoch");
+            Some(duration.as_nanos() as u64)
+        }
+        Some(AtModifier::Start) => Some(params.start_ns),
+        Some(AtModifier::End) => Some(params.end_ns),
+        None => None,
     }
 }
 
@@ -74,8 +93,21 @@ pub async fn plan_expr(
     match expr {
         Expr::VectorSelector(vs) => {
             let offset_ns = offset_to_ns(&vs.offset);
+            let at_ns = resolve_at_modifier(&vs.at, &params);
+
+            // When @ is set, narrow the data fetch range to the fixed timestamp
+            // so we only scan the data needed for that point in time.
+            let fetch_range = if let Some(at_ts) = at_ns {
+                TimeRange {
+                    start_ns: Some(at_ts),
+                    end_ns: Some(at_ts),
+                }
+            } else {
+                time_range
+            };
+
             let (child_plan, label_columns) =
-                plan_vector_selector(vs, source, time_range, 0, offset_ns).await?;
+                plan_vector_selector(vs, source, fetch_range, 0, offset_ns).await?;
 
             if let Some(ts) = params.eval_ts_ns {
                 let node = InstantVectorEval::new(
@@ -84,6 +116,7 @@ pub async fn plan_expr(
                     DEFAULT_LOOKBACK_NS,
                     offset_ns,
                     label_columns,
+                    at_ns,
                 );
                 Ok(LogicalPlan::Extension(Extension {
                     node: Arc::new(node),
@@ -97,6 +130,7 @@ pub async fn plan_expr(
                     DEFAULT_LOOKBACK_NS,
                     offset_ns,
                     label_columns,
+                    at_ns,
                 );
                 Ok(LogicalPlan::Extension(Extension {
                     node: Arc::new(node),
@@ -213,14 +247,25 @@ async fn plan_call(
 
         let range_ns = matrix.range.as_nanos() as u64;
         let offset_ns = offset_to_ns(&matrix.vs.offset);
+        let at_ns = resolve_at_modifier(&matrix.vs.at, &params);
+
+        // When @ is set, narrow the data fetch range to the fixed timestamp.
+        let fetch_range = if let Some(at_ts) = at_ns {
+            TimeRange {
+                start_ns: Some(at_ts),
+                end_ns: Some(at_ts),
+            }
+        } else {
+            time_range
+        };
 
         // Plan the inner vector selector with extra range expansion.
         let (child_plan, label_columns) =
-            plan_vector_selector(&matrix.vs, source, time_range, range_ns, offset_ns).await?;
+            plan_vector_selector(&matrix.vs, source, fetch_range, range_ns, offset_ns).await?;
 
         // Wrap in RangeVectorEval (windowing) then RangeFunctionEval (function).
         let window_node = if let Some(ts) = params.eval_ts_ns {
-            RangeVectorEval::instant(child_plan, ts, range_ns, offset_ns, label_columns)?
+            RangeVectorEval::instant(child_plan, ts, range_ns, offset_ns, label_columns, at_ns)?
         } else {
             RangeVectorEval::range(
                 child_plan,
@@ -230,6 +275,7 @@ async fn plan_call(
                 range_ns,
                 offset_ns,
                 label_columns,
+                at_ns,
             )?
         };
 
