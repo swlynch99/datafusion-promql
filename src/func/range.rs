@@ -13,6 +13,8 @@ pub(crate) enum RangeFunction {
     Delta,
     /// Difference between the last two samples (gauge equivalent of irate).
     Idelta,
+    /// Average value of all samples in the range.
+    AvgOverTime,
 }
 
 impl fmt::Display for RangeFunction {
@@ -23,6 +25,7 @@ impl fmt::Display for RangeFunction {
             Self::Increase => write!(f, "increase"),
             Self::Delta => write!(f, "delta"),
             Self::Idelta => write!(f, "idelta"),
+            Self::AvgOverTime => write!(f, "avg_over_time"),
         }
     }
 }
@@ -35,6 +38,7 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
         "increase" => Some(RangeFunction::Increase),
         "delta" => Some(RangeFunction::Delta),
         "idelta" => Some(RangeFunction::Idelta),
+        "avg_over_time" => Some(RangeFunction::AvgOverTime),
         _ => None,
     }
 }
@@ -45,6 +49,17 @@ impl RangeFunction {
     /// Samples must be sorted by timestamp. Returns `None` if there are
     /// insufficient samples to compute a result.
     pub fn evaluate(&self, samples: &[(u64, f64)]) -> Option<f64> {
+        if samples.is_empty() {
+            return None;
+        }
+
+        // Functions that only need 1 sample.
+        if let Self::AvgOverTime = self {
+            let sum: f64 = samples.iter().map(|(_, v)| v).sum();
+            return Some(sum / samples.len() as f64);
+        }
+
+        // All remaining functions need at least 2 samples.
         if samples.len() < 2 {
             return None;
         }
@@ -89,6 +104,7 @@ impl RangeFunction {
                 let (_, last_val) = samples[n - 1];
                 Some(last_val - prev_val)
             }
+            Self::AvgOverTime => unreachable!(),
         }
     }
 }
@@ -291,5 +307,36 @@ mod tests {
     fn test_idelta_insufficient_samples() {
         let samples = vec![(1_000_000_000, 10.0)];
         assert!(RangeFunction::Idelta.evaluate(&samples).is_none());
+    }
+
+    #[test]
+    fn test_avg_over_time_basic() {
+        let samples = vec![
+            (0, 10.0),
+            (1_000_000_000, 20.0),
+            (2_000_000_000, 30.0),
+            (3_000_000_000, 40.0),
+        ];
+        let result = RangeFunction::AvgOverTime.evaluate(&samples).unwrap();
+        assert!(
+            (result - 25.0).abs() < f64::EPSILON,
+            "expected 25.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_avg_over_time_single_sample() {
+        let samples = vec![(1_000_000_000, 42.0)];
+        let result = RangeFunction::AvgOverTime.evaluate(&samples).unwrap();
+        assert!(
+            (result - 42.0).abs() < f64::EPSILON,
+            "expected 42.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_avg_over_time_empty() {
+        let samples: Vec<(u64, f64)> = vec![];
+        assert!(RangeFunction::AvgOverTime.evaluate(&samples).is_none());
     }
 }
