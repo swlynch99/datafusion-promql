@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{ArrayBuilder, Float64Builder, StringBuilder, UInt64Builder};
+use arrow::array::{Float64Builder, StringBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
@@ -58,6 +58,7 @@ fn compute_output_schema(child_schema: &SchemaRef, label_columns: &[String]) -> 
 }
 
 impl StreamingRangeFuncExec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
         func: RangeFunction,
@@ -305,6 +306,7 @@ fn finish_builders(
 ///
 /// This is called both when a series boundary is detected and at the end of
 /// the input stream to finalise the last (or only) series.
+#[allow(clippy::too_many_arguments)]
 fn flush_remaining_eval_windows(
     series_key: &[String],
     window: &mut VecDeque<(u64, f64)>,
