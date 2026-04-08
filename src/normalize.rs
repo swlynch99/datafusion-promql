@@ -10,6 +10,7 @@ use datafusion::common::Column;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Union};
 use datafusion::prelude::{cast, col, lit};
+use regex::Regex;
 
 /// A column that matched the requested metric, with its parsed labels.
 #[derive(Debug, Clone)]
@@ -246,7 +247,22 @@ fn labels_match_matchers(labels: &Labels, matchers: &[Matcher]) -> bool {
                     return false;
                 }
             }
-            MatchOp::RegexMatch | MatchOp::RegexNotMatch => {}
+            MatchOp::RegexMatch => {
+                let anchored = format!("^(?:{})$", m.value);
+                if let Ok(re) = Regex::new(&anchored)
+                    && !re.is_match(label_val)
+                {
+                    return false;
+                }
+            }
+            MatchOp::RegexNotMatch => {
+                let anchored = format!("^(?:{})$", m.value);
+                if let Ok(re) = Regex::new(&anchored)
+                    && re.is_match(label_val)
+                {
+                    return false;
+                }
+            }
         }
     }
     true
