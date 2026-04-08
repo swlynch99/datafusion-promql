@@ -1096,3 +1096,141 @@ async fn test_sum_rate_cgroup_by_cgroup() {
         samples[0].1
     );
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Regex label matchers on wide-format columns
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_regex_label_filter_on_wide_format() {
+    // Build a source with ids 0 through 5.
+    let source = RezolusMockBuilder::new()
+        .timestamps_ms(vec![1000, 2000, 3000])
+        .column("cpu_usage/user/0", vec![10.0, 20.0, 30.0])
+        .column("cpu_usage/user/1", vec![11.0, 21.0, 31.0])
+        .column("cpu_usage/user/2", vec![12.0, 22.0, 32.0])
+        .column("cpu_usage/user/3", vec![13.0, 23.0, 33.0])
+        .column("cpu_usage/user/4", vec![14.0, 24.0, 34.0])
+        .column("cpu_usage/user/5", vec![15.0, 25.0, 35.0])
+        .build();
+
+    let e = engine(source);
+
+    // Regex filter: id =~ "[0-2]" should only match ids 0, 1, and 2.
+    let result = e
+        .instant_query(r#"cpu_usage{id=~"[0-2]"}"#, ts(3000))
+        .await
+        .unwrap();
+
+    let samples = sorted_vector(result);
+    assert_eq!(
+        samples.len(),
+        3,
+        "expected 3 series for ids 0,1,2 but got {}: {:?}",
+        samples.len(),
+        samples
+            .iter()
+            .map(|(l, _)| l.get("id").unwrap().as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let ids: Vec<&str> = samples
+        .iter()
+        .map(|(l, _)| l.get("id").unwrap().as_str())
+        .collect();
+    assert!(ids.contains(&"0"));
+    assert!(ids.contains(&"1"));
+    assert!(ids.contains(&"2"));
+    assert!(!ids.contains(&"3"));
+    assert!(!ids.contains(&"4"));
+    assert!(!ids.contains(&"5"));
+}
+
+#[tokio::test]
+async fn test_regex_not_match_label_filter_on_wide_format() {
+    let source = RezolusMockBuilder::new()
+        .timestamps_ms(vec![1000, 2000, 3000])
+        .column("cpu_usage/user/0", vec![10.0, 20.0, 30.0])
+        .column("cpu_usage/user/1", vec![11.0, 21.0, 31.0])
+        .column("cpu_usage/user/2", vec![12.0, 22.0, 32.0])
+        .column("cpu_usage/user/3", vec![13.0, 23.0, 33.0])
+        .build();
+
+    let e = engine(source);
+
+    // Negative regex: id !~ "[0-1]" should exclude ids 0 and 1, leaving 2 and 3.
+    let result = e
+        .instant_query(r#"cpu_usage{id!~"[0-1]"}"#, ts(3000))
+        .await
+        .unwrap();
+
+    let samples = sorted_vector(result);
+    assert_eq!(samples.len(), 2);
+
+    let ids: Vec<&str> = samples
+        .iter()
+        .map(|(l, _)| l.get("id").unwrap().as_str())
+        .collect();
+    assert!(ids.contains(&"2"));
+    assert!(ids.contains(&"3"));
+}
+
+#[tokio::test]
+async fn test_regex_filter_with_aggregation_on_wide_format() {
+    // Reproduces the original bug: sum(irate(cpu_usage{id=~"[0-2]"}[5m])) by (id)
+    let timestamps: Vec<i64> = (0..11).map(|i| 10_000 + i * 1000).collect();
+
+    let source = RezolusMockBuilder::new()
+        .timestamps_ms(timestamps)
+        .column(
+            "cpu_usage/user/0",
+            (0..11).map(|i| (i * 100) as f64).collect(),
+        )
+        .column(
+            "cpu_usage/user/1",
+            (0..11).map(|i| (i * 200) as f64).collect(),
+        )
+        .column(
+            "cpu_usage/user/2",
+            (0..11).map(|i| (i * 300) as f64).collect(),
+        )
+        .column(
+            "cpu_usage/user/3",
+            (0..11).map(|i| (i * 400) as f64).collect(),
+        )
+        .column(
+            "cpu_usage/user/4",
+            (0..11).map(|i| (i * 500) as f64).collect(),
+        )
+        .build();
+
+    let e = engine(source);
+
+    let result = e
+        .instant_query(
+            r#"sum(irate(cpu_usage{id=~"[0-2]"}[5s])) by (id)"#,
+            ts(15000),
+        )
+        .await
+        .unwrap();
+
+    let samples = sorted_vector(result);
+
+    // Should only have ids 0, 1, 2 — not 3 or 4.
+    let ids: Vec<&str> = samples
+        .iter()
+        .map(|(l, _)| l.get("id").unwrap().as_str())
+        .collect();
+    assert_eq!(
+        ids.len(),
+        3,
+        "expected 3 series for ids 0,1,2 but got {}: {:?}",
+        ids.len(),
+        ids
+    );
+    assert!(ids.contains(&"0"));
+    assert!(ids.contains(&"1"));
+    assert!(ids.contains(&"2"));
+    assert!(!ids.contains(&"3"));
+    assert!(!ids.contains(&"4"));
+}
