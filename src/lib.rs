@@ -4,6 +4,7 @@ pub mod types;
 
 pub mod exec;
 mod func;
+pub use func::RangeFunction;
 pub mod node;
 mod normalize;
 pub mod opt;
@@ -59,6 +60,9 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(crate::opt::logical::RangeVectorToAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::PushInstantEvalThroughUnion))
             .with_optimizer_rule(Arc::new(crate::opt::logical::PushStepEvalThroughUnion))
+            .with_optimizer_rule(Arc::new(
+                crate::opt::logical::PushStreamingRangeFuncEvalThroughUnion,
+            ))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LiftConstantProjections))
             .with_optimizer_rule(Arc::new(crate::opt::logical::FoldRedundantAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RemoveNoopProjections))

@@ -13,6 +13,7 @@ pub(crate) use datetime::{
 };
 pub(crate) use instant::lookup_instant_function;
 pub(crate) use label::{make_label_join_udf, make_label_replace_udf};
-pub(crate) use range::{RangeFunction, lookup_range_function};
+pub use range::RangeFunction;
+pub(crate) use range::lookup_range_function;
 pub(crate) use sort::lookup_sort_function;
 pub(crate) use udf::instant_func_to_expr;

@@ -2,7 +2,7 @@ use std::fmt;
 
 /// Range vector functions that operate on a window of samples.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum RangeFunction {
+pub enum RangeFunction {
     /// Per-second rate of increase (counter metric).
     Rate,
     /// Instant rate using only the last two samples (counter metric).
