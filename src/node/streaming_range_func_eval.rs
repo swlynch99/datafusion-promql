@@ -26,7 +26,7 @@ use crate::func::RangeFunction;
 /// `irate` and `idelta`), where the overhead of materialising full window
 /// arrays is not worthwhile.
 #[derive(Debug, Clone)]
-pub(crate) struct StreamingRangeFunctionEval {
+pub struct StreamingRangeFunctionEval {
     /// Raw-sample input plan (same source as `RangeVectorEval`'s input).
     pub input: LogicalPlan,
     /// The range function to apply at each evaluation timestamp.
