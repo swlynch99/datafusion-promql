@@ -5,6 +5,7 @@ mod instant_function;
 mod range_eval;
 mod range_func_eval;
 mod step_eval;
+mod streaming_range_func_eval;
 
 pub(crate) use binary_eval::{
     BinaryEval, BinaryOp, MatchCardinality, ScalarBinaryEval, VectorMatching, convert_binary_op,
@@ -15,3 +16,4 @@ pub(crate) use instant_function::InstantFunction;
 pub(crate) use range_eval::RangeVectorEval;
 pub(crate) use range_func_eval::RangeFunctionEval;
 pub use step_eval::StepVectorEval;
+pub(crate) use streaming_range_func_eval::StreamingRangeFunctionEval;

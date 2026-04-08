@@ -2,6 +2,7 @@ mod functions;
 mod instant_query;
 mod optimizations;
 mod range_query;
+mod streaming_range_func;
 
 #[cfg(feature = "parquet")]
 mod dump_query;
