@@ -325,7 +325,11 @@ fn flush_remaining_eval_windows(
         let window_start = eff_ts.saturating_sub(range_ns);
 
         // Evict samples that are now before the window start.
-        while window.front().map(|(t, _)| *t < window_start).unwrap_or(false) {
+        while window
+            .front()
+            .map(|(t, _)| *t < window_start)
+            .unwrap_or(false)
+        {
             window.pop_front();
         }
 
@@ -446,7 +450,11 @@ fn compute_streaming_windows(
                 let window_start = eff_ts.saturating_sub(range_ns);
 
                 // Evict samples older than the window start.
-                while window.front().map(|(t, _)| *t < window_start).unwrap_or(false) {
+                while window
+                    .front()
+                    .map(|(t, _)| *t < window_start)
+                    .unwrap_or(false)
+                {
                     window.pop_front();
                 }
 
@@ -488,5 +496,11 @@ fn compute_streaming_windows(
         );
     }
 
-    finish_builders(output_schema, &mut out_ts, &mut out_val, &mut out_labels, label_columns)
+    finish_builders(
+        output_schema,
+        &mut out_ts,
+        &mut out_val,
+        &mut out_labels,
+        label_columns,
+    )
 }

@@ -114,8 +114,8 @@ fn compute_output_schema(input: &LogicalPlan, label_columns: &[String]) -> Resul
         fields.push(Field::new(label, DataType::Utf8, nullable));
     }
     let schema = Schema::new(fields);
-    let df_schema = DFSchema::try_from(schema)
-        .map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
+    let df_schema =
+        DFSchema::try_from(schema).map_err(|e| PromqlError::Plan(format!("schema error: {e}")))?;
     Ok(Arc::new(df_schema))
 }
 

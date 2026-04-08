@@ -152,11 +152,18 @@ async fn test_streaming_irate_counter_reset() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["c", "c", "c", "c", "c"])),
-            Arc::new(UInt64Array::from(vec![0, 1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000])),
+            Arc::new(UInt64Array::from(vec![
+                0,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![0.0, 10.0, 20.0, 5.0, 15.0])),
             Arc::new(StringArray::from(vec!["h1", "h1", "h1", "h1", "h1"])),
         ],
-    ).unwrap();
+    )
+    .unwrap();
     let source = InMemorySource::new(schema, vec![batch]);
     let engine = PromqlEngine::new(Arc::new(source));
 
@@ -333,10 +340,7 @@ async fn test_streaming_irate_insufficient_samples() {
             );
         }
         QueryResult::Vector(samples) => {
-            assert!(
-                samples.is_empty(),
-                "expected empty vector, got {samples:?}"
-            );
+            assert!(samples.is_empty(), "expected empty vector, got {samples:?}");
         }
         other => panic!("unexpected result type: {other:?}"),
     }
@@ -444,11 +448,16 @@ async fn test_streaming_irate_window_eviction() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from((0..n).map(|_| "m").collect::<Vec<_>>())),
-            Arc::new(UInt64Array::from((0..n).map(|i| i * 1_000_000_000).collect::<Vec<_>>())),
-            Arc::new(Float64Array::from((0..n).map(|i| i as f64 * 10.0).collect::<Vec<_>>())),
+            Arc::new(UInt64Array::from(
+                (0..n).map(|i| i * 1_000_000_000).collect::<Vec<_>>(),
+            )),
+            Arc::new(Float64Array::from(
+                (0..n).map(|i| i as f64 * 10.0).collect::<Vec<_>>(),
+            )),
             Arc::new(StringArray::from((0..n).map(|_| "h").collect::<Vec<_>>())),
         ],
-    ).unwrap();
+    )
+    .unwrap();
     let source = InMemorySource::new(schema, vec![batch]);
     let engine = PromqlEngine::new(Arc::new(source));
 
@@ -497,11 +506,17 @@ async fn test_streaming_irate_eval_beyond_data() {
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(vec!["m", "m", "m", "m"])),
-            Arc::new(UInt64Array::from(vec![0u64, 1_000_000_000, 2_000_000_000, 3_000_000_000])),
+            Arc::new(UInt64Array::from(vec![
+                0u64,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+            ])),
             Arc::new(Float64Array::from(vec![0.0, 10.0, 20.0, 30.0])),
             Arc::new(StringArray::from(vec!["h", "h", "h", "h"])),
         ],
-    ).unwrap();
+    )
+    .unwrap();
     let source = InMemorySource::new(schema, vec![batch]);
     let engine = PromqlEngine::new(Arc::new(source));
 

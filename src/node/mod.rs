@@ -15,5 +15,5 @@ pub use instant_eval::InstantVectorEval;
 pub(crate) use instant_function::InstantFunction;
 pub(crate) use range_eval::RangeVectorEval;
 pub(crate) use range_func_eval::RangeFunctionEval;
-pub(crate) use streaming_range_func_eval::StreamingRangeFunctionEval;
 pub use step_eval::StepVectorEval;
+pub(crate) use streaming_range_func_eval::StreamingRangeFunctionEval;
