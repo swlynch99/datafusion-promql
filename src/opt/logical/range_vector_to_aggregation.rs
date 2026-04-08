@@ -11,7 +11,7 @@ use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 
 use crate::func::RangeFunction;
 use crate::func::range_udaf::make_range_udaf;
-use crate::node::{RangeFunctionEval, RangeVectorEval};
+use crate::node::{RangeFunctionEval, RangeVectorEval, StreamingRangeFunctionEval};
 
 /// Optimizer rule that rewrites a `RangeFunctionEval` wrapping a
 /// `RangeVectorEval` into standard DataFusion plans: a cross join with
@@ -61,6 +61,32 @@ impl OptimizerRule for RangeVectorToAggregation {
         // aggregation — keep them on the custom RangeFunctionExec path.
         if matches!(func, RangeFunction::Deriv | RangeFunction::PredictLinear) {
             return Ok(Transformed::no(plan));
+        }
+
+        // Functions that only examine the last few samples in the window
+        // (irate, idelta) are better served by the streaming sliding-window
+        // node, which processes sorted input in a single pass without
+        // materialising intermediate List arrays and without a cross join.
+        if matches!(func, RangeFunction::Irate | RangeFunction::Idelta) {
+            let streaming = StreamingRangeFunctionEval::new(
+                eval.input.clone(),
+                func,
+                func_eval.scalar_arg,
+                eval.range_ns,
+                eval.eval_ts_ns,
+                eval.start_ns,
+                eval.end_ns,
+                eval.step_ns,
+                eval.offset_ns,
+                eval.label_columns.clone(),
+                eval.at_timestamp_ns,
+            )
+            .map_err(|e| datafusion::error::DataFusionError::Plan(e.to_string()))?;
+            return Ok(Transformed::yes(LogicalPlan::Extension(
+                datafusion::logical_expr::Extension {
+                    node: Arc::new(streaming),
+                },
+            )));
         }
 
         let input = eval.input.clone();
