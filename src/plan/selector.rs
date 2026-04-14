@@ -135,9 +135,10 @@ pub(crate) async fn plan_vector_selector(
 
     match format {
         TableFormat::Wide(mapping) => {
-            // Normalize wide format to long format via UNION ALL projections.
-            // After normalization, `timestamp` is always UInt64 nanoseconds.
-            let (plan, label_columns) = crate::normalize::normalize_wide_to_long(
+            // Normalize wide format to long format via a single scan followed
+            // by a WideUnpack node. After normalization, `timestamp` is always
+            // UInt64 nanoseconds.
+            let (plan, label_columns) = crate::normalize::plan_wide_single_scan(
                 provider,
                 &mapping,
                 metric_name,

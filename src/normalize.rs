@@ -3,26 +3,27 @@ use std::sync::Arc;
 
 use crate::datasource::{ColumnMapping, MatchOp, Matcher};
 use crate::error::{PromqlError, Result};
+use crate::node::{WideColumnMeta, WideUnpack};
 use crate::types::{Labels, TimeRange};
 use arrow::datatypes::DataType;
 use datafusion::catalog::TableProvider;
 use datafusion::common::Column;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Union};
+use datafusion::logical_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::{cast, col, lit};
 use regex::Regex;
 
 /// A column that matched the requested metric, with its parsed labels.
 #[derive(Debug, Clone)]
-struct MatchedColumn {
+pub(crate) struct MatchedColumn {
     /// The original column name in the wide-format table.
-    col_name: String,
+    pub col_name: String,
     /// The labels parsed from the column field metadata.
-    labels: Labels,
+    pub labels: Labels,
 }
 
 /// Analyze the wide-format schema and find columns matching the given metric.
-fn find_matching_columns(
+pub(crate) fn find_matching_columns(
     provider: &dyn TableProvider,
     mapping: &ColumnMapping,
     metric_name: &str,
@@ -80,28 +81,18 @@ fn find_matching_columns(
 }
 
 /// Convert a wide-format `TableProvider` into a long-format logical plan via
-/// a UNION ALL of per-column projections.
+/// a single table scan followed by a [`WideUnpack`] node.
 ///
-/// Each matched column produces one branch:
-/// ```sql
-/// SELECT
-///     CAST(ts AS BIGINT) AS timestamp,
-///     CAST(<col> AS DOUBLE)        AS value,
-///     '<metric>'                   AS __name__,
-///     '<label_val>'                AS <label_key>, ...
-/// FROM wide_table
-/// ```
+/// Unlike [`normalize_wide_to_long`], this function reads ALL matched value
+/// columns in a single scan (timestamp + N value columns) and relies on the
+/// `WideUnpack` execution node to expand each input row into N output rows
+/// (one per value column).
 ///
-/// All branches are combined with UNION ALL. The caller applies time-range
-/// filtering and sorting on top.
-///
-/// `time_range` is embedded directly in each branch's `scan_with_filters` so
-/// that the parquet reader can prune row groups without relying on the
-/// DataFusion optimizer to push the outer Filter node all the way down through
-/// the Union → Sort → Projection chain.
+/// This eliminates the N independent file scans that the UNION ALL approach
+/// requires. The output schema and semantics are identical.
 ///
 /// Returns `(LogicalPlan, label_column_names)`.
-pub(crate) fn normalize_wide_to_long(
+pub(crate) fn plan_wide_single_scan(
     provider: Arc<dyn TableProvider>,
     mapping: &ColumnMapping,
     metric_name: &str,
@@ -113,31 +104,26 @@ pub(crate) fn normalize_wide_to_long(
 
     let all_label_keys: Vec<String> = all_label_keys.into_iter().collect();
 
-    // Build one SELECT branch per matched column.
-    // Each branch gets a unique scan alias so the DataFusion optimizer does not
-    // collapse the identical table scans into a single one via CSE.
-    // Check if the timestamp column already has the target type.
     let schema = provider.schema();
     let ts_field = schema
         .field_with_name(mapping.timestamp_column.as_str())
         .map_err(|e| PromqlError::Plan(format!("timestamp column not found: {e}")))?;
-    let ts_expr = if ts_field.data_type() == &DataType::UInt64 {
-        col(mapping.timestamp_column.as_str()).alias("timestamp")
-    } else {
-        cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp")
-    };
 
-    // Pre-compute the timestamp column index (shared across all branches).
+    // Pre-compute the timestamp column index.
     let ts_col_idx = schema
         .index_of(mapping.timestamp_column.as_str())
         .map_err(|e| PromqlError::Plan(format!("timestamp column not found: {e}")))?;
 
-    // Build scan-level time-range filters once, shared across all branches.
-    // These use the original column name and type so they can be pushed down
-    // to the parquet reader for row-group pruning directly — without depending
-    // on the DataFusion optimizer to propagate them through Union/Sort/Projection.
-    // The outer Filter node added by plan_vector_selector still provides
-    // row-level correctness; these scan filters are purely for pruning.
+    // Build column projection: timestamp + all matched value columns.
+    let mut projection_indices = vec![ts_col_idx];
+    for mc in &matched {
+        let idx = schema
+            .index_of(mc.col_name.as_str())
+            .map_err(|e| PromqlError::Plan(format!("column '{}' not found: {e}", mc.col_name)))?;
+        projection_indices.push(idx);
+    }
+
+    // Build scan-level time-range filters for parquet row-group pruning.
     let scan_time_filters: Vec<Expr> = {
         let ts_col = col(mapping.timestamp_column.as_str());
         let is_int64 = ts_field.data_type() == &DataType::Int64;
@@ -157,79 +143,64 @@ pub(crate) fn normalize_wide_to_long(
         filters
     };
 
-    let mut branch_plans: Vec<LogicalPlan> = Vec::with_capacity(matched.len());
-    for (idx, mc) in matched.iter().enumerate() {
-        let mut exprs = vec![
-            // Timestamp: cast to UInt64 (nanoseconds) if needed.
-            ts_expr.clone(),
-            // Value: cast to Float64.
-            // Use Column::new_unqualified to bypass the SQL parser, which would
-            // strip anything after `/` from the column name.
+    // Build a single scan reading timestamp + all matched value columns.
+    let scan_plan = LogicalPlanBuilder::scan_with_filters(
+        metric_name,
+        provider_as_source(provider),
+        Some(projection_indices),
+        scan_time_filters,
+    )
+    .map_err(|e| PromqlError::Plan(format!("failed to build scan: {e}")))?;
+
+    // Project: cast timestamp to UInt64 if needed, cast value columns to Float64.
+    let ts_expr = if ts_field.data_type() == &DataType::UInt64 {
+        col(mapping.timestamp_column.as_str()).alias("timestamp")
+    } else {
+        cast(col(mapping.timestamp_column.as_str()), DataType::UInt64).alias("timestamp")
+    };
+
+    let mut proj_exprs = vec![ts_expr];
+    for mc in &matched {
+        // Cast each value column to Float64, keeping its original name so
+        // WideUnpackExec can look it up by name.
+        proj_exprs.push(
             cast(
                 Expr::Column(Column::new_unqualified(mc.col_name.as_str())),
                 DataType::Float64,
             )
-            .alias("value"),
-            // Metric name literal.
-            lit(metric_name).alias("__name__"),
-        ];
-        // One string-literal column per label key.
-        for key in &all_label_keys {
-            let val = mc.labels.get(key).map(|s| s.as_str()).unwrap_or("");
-            exprs.push(lit(val).alias(key.as_str()));
-        }
+            .alias(mc.col_name.as_str()),
+        );
+    }
 
-        // Project only the two physical columns this branch needs: timestamp
-        // and the one value column. All other label columns are constant
-        // literals in the Projection above, so the parquet reader never has
-        // to decode them. This keeps each scan's schema small (2 columns
-        // instead of all C columns in the file), which dramatically reduces
-        // the size of the unoptimized logical plan and avoids O(M × C) output
-        // when the plan is displayed.
-        let value_col_idx = schema
-            .index_of(mc.col_name.as_str())
-            .map_err(|e| PromqlError::Plan(format!("column '{}' not found: {e}", mc.col_name)))?;
-        let projection = Some(vec![ts_col_idx, value_col_idx]);
-
-        // Use a unique alias per branch so the optimizer treats each scan as
-        // distinct (avoids CSE merging identical-looking table scans).
-        let scan_alias = format!("{metric_name}_{idx}");
-        let plan = LogicalPlanBuilder::scan_with_filters(
-            scan_alias,
-            provider_as_source(Arc::clone(&provider)),
-            projection,
-            scan_time_filters.clone(),
-        )
-        .map_err(|e| PromqlError::Plan(format!("failed to build scan: {e}")))?
-        .project(exprs)
+    let plan = scan_plan
+        .project(proj_exprs)
         .map_err(|e| PromqlError::Plan(format!("failed to build projection: {e}")))?
-        // Sort each branch by timestamp independently. Since label columns
-        // are constant literals within each branch, this is equivalent to
-        // sorting by labels + timestamp but avoids a full sort over the
-        // combined UNION ALL output.
+        // Sort by timestamp so the WideUnpack output (which processes one
+        // column at a time) is sorted by (label_columns, timestamp).
         .sort(vec![col("timestamp").sort(true, false)])
         .map_err(|e| PromqlError::Plan(format!("failed to add sort: {e}")))?
         .build()
         .map_err(|e| PromqlError::Plan(format!("failed to build plan: {e}")))?;
 
-        branch_plans.push(plan);
-    }
+    // Build WideColumnMeta for each matched column.
+    let column_metas: Vec<WideColumnMeta> = matched
+        .iter()
+        .map(|mc| WideColumnMeta {
+            col_name: mc.col_name.clone(),
+            metric_name: metric_name.to_string(),
+            labels: mc.labels.clone(),
+        })
+        .collect();
 
-    // UNION ALL all branches into a single flat Union node.
-    let union_plan = if branch_plans.len() == 1 {
-        branch_plans.into_iter().next().unwrap()
-    } else {
-        let inputs: Vec<Arc<LogicalPlan>> = branch_plans.into_iter().map(Arc::new).collect();
-        LogicalPlan::Union(
-            Union::try_new_with_loose_types(inputs)
-                .map_err(|e| PromqlError::Plan(format!("failed to build union: {e}")))?,
-        )
-    };
+    let unpack = WideUnpack::new(plan, column_metas, all_label_keys.clone())?;
+    let unpack_plan = LogicalPlan::Extension(Extension {
+        node: Arc::new(unpack),
+    });
 
     let mut label_columns = vec!["__name__".to_string()];
     label_columns.extend(all_label_keys);
 
-    Ok((union_plan, label_columns))
+    Ok((unpack_plan, label_columns))
 }
 
 /// Check whether parsed labels satisfy all matchers.
