@@ -123,7 +123,7 @@ extern "C" fn sigsegv_handler(
                 if frame_bp.is_null() || (frame_bp as u64) < 0x10000 {
                     break;
                 }
-                if (frame_bp as usize) % 8 != 0 {
+                if !(frame_bp as usize).is_multiple_of(8) {
                     break;
                 }
                 // Carefully read from the stack — might fault again.
