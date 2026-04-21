@@ -820,6 +820,340 @@ async fn test_range_query_predict_linear() {
     }
 }
 
+// ---- sum/min/max/last/present_over_time ----
+
+#[tokio::test]
+async fn test_instant_query_sum_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // sum_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: values 20,22,25,23,21,24 -> sum = 135
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("sum_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 135.0).abs() < f64::EPSILON,
+                "expected 135.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_min_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // min_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: values 20,22,25,23,21,24 -> min = 20
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("min_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 20.0).abs() < f64::EPSILON,
+                "expected 20.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_max_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // max_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: values 20,22,25,23,21,24 -> max = 25
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("max_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 25.0).abs() < f64::EPSILON,
+                "expected 25.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_last_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // last_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: last sample is at t=5s with value 24
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("last_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 24.0).abs() < f64::EPSILON,
+                "expected 24.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_present_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // present_over_time(temperature[5s]) at t=5s always returns 1.0 when
+    // samples exist in the window.
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("present_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 1.0).abs() < f64::EPSILON,
+                "expected 1.0, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+// ---- stddev/stdvar_over_time ----
+
+#[tokio::test]
+async fn test_instant_query_stdvar_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // stdvar_over_time(temperature[5s]) at t=5s
+    // Window [0s, 5s]: values 20,22,25,23,21,24; mean = 22.5
+    // squared deviations: 6.25, 0.25, 6.25, 0.25, 2.25, 2.25; sum=17.5
+    // population variance = 17.5 / 6 = 2.9166...
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("stdvar_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            let expected = 17.5_f64 / 6.0;
+            assert!(
+                (samples[0].value - expected).abs() < 1e-9,
+                "expected {expected}, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_stddev_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // stddev_over_time is sqrt of the variance above.
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("stddev_over_time(temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            let expected = (17.5_f64 / 6.0).sqrt();
+            assert!(
+                (samples[0].value - expected).abs() < 1e-9,
+                "expected {expected}, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+// ---- quantile_over_time ----
+
+#[tokio::test]
+async fn test_instant_query_quantile_over_time_median() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // quantile_over_time(0.5, temperature[5s]) at t=5s
+    // Window [0s, 5s]: sorted values = 20,21,22,23,24,25; median = 22.5
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+    let result = engine
+        .instant_query("quantile_over_time(0.5, temperature[5s])", ts)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Vector(samples) => {
+            assert_eq!(samples.len(), 1);
+            assert!(
+                (samples[0].value - 22.5).abs() < 1e-9,
+                "expected 22.5, got {}",
+                samples[0].value
+            );
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_instant_query_quantile_over_time_endpoints() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // quantile_over_time(0.0, ...) -> min; quantile_over_time(1.0, ...) -> max
+    let ts = chrono::Utc.timestamp_millis_opt(5000).unwrap();
+
+    let min_result = engine
+        .instant_query("quantile_over_time(0, temperature[5s])", ts)
+        .await
+        .unwrap();
+    match min_result {
+        QueryResult::Vector(samples) => {
+            assert!((samples[0].value - 20.0).abs() < f64::EPSILON);
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+
+    let max_result = engine
+        .instant_query("quantile_over_time(1, temperature[5s])", ts)
+        .await
+        .unwrap();
+    match max_result {
+        QueryResult::Vector(samples) => {
+            assert!((samples[0].value - 25.0).abs() < f64::EPSILON);
+        }
+        other => panic!("expected Vector result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_sum_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // sum_over_time(temperature[3s]) over [3s, 6s] step 3s
+    // gauge_values: 20, 22, 25, 23, 21, 24, 26
+    // At t=3s: window [0s,3s] -> 20+22+25+23 = 90
+    // At t=6s: window [3s,6s] -> 23+21+24+26 = 94
+    let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
+    let step = Duration::from_secs(3);
+
+    let result = engine
+        .range_query("sum_over_time(temperature[3s])", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].samples.len(), 2);
+            assert!((series[0].samples[0].1 - 90.0).abs() < f64::EPSILON);
+            assert!((series[0].samples[1].1 - 94.0).abs() < f64::EPSILON);
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_last_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // last_over_time(temperature[3s]) over [3s, 6s] step 3s
+    // gauge_values: 20, 22, 25, 23, 21, 24, 26 at t=0..6s
+    // At t=3s: last sample is at 3s -> 23
+    // At t=6s: last sample is at 6s -> 26
+    let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
+    let step = Duration::from_secs(3);
+
+    let result = engine
+        .range_query("last_over_time(temperature[3s])", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].samples.len(), 2);
+            assert!((series[0].samples[0].1 - 23.0).abs() < f64::EPSILON);
+            assert!((series[0].samples[1].1 - 26.0).abs() < f64::EPSILON);
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_range_query_quantile_over_time() {
+    let source = make_gauge_source();
+    let engine = PromqlEngine::new(Arc::new(source));
+
+    // quantile_over_time(0.5, temperature[3s]) over [3s, 6s] step 3s
+    // At t=3s: window [0s,3s] -> sorted 20,22,23,25 -> median = (22+23)/2 = 22.5
+    // At t=6s: window [3s,6s] -> sorted 21,23,24,26 -> median = (23+24)/2 = 23.5
+    let start = chrono::Utc.timestamp_millis_opt(3000).unwrap();
+    let end = chrono::Utc.timestamp_millis_opt(6000).unwrap();
+    let step = Duration::from_secs(3);
+
+    let result = engine
+        .range_query("quantile_over_time(0.5, temperature[3s])", start, end, step)
+        .await
+        .unwrap();
+
+    match result {
+        QueryResult::Matrix(series) => {
+            assert_eq!(series.len(), 1);
+            assert_eq!(series[0].samples.len(), 2);
+            assert!((series[0].samples[0].1 - 22.5).abs() < 1e-9);
+            assert!((series[0].samples[1].1 - 23.5).abs() < 1e-9);
+        }
+        other => panic!("expected Matrix result, got {other:?}"),
+    }
+}
+
 // ---- Error cases ----
 
 #[tokio::test]

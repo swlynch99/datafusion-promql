@@ -95,7 +95,7 @@ Seven custom DataFusion optimizer rules handle PromQL-specific plan transformati
 
 ### Functions (`src/func/`)
 
-- `func/range.rs`: `rate`, `irate`, `increase`, `delta`, `idelta`, `avg_over_time` — operate on a sliding window of `(timestamp, value)` pairs
+- `func/range.rs`: `rate`, `irate`, `increase`, `delta`, `idelta`, `deriv`, `predict_linear`, `avg_over_time`, `count_over_time`, `sum_over_time`, `min_over_time`, `max_over_time`, `stddev_over_time`, `stdvar_over_time`, `quantile_over_time`, `last_over_time`, `present_over_time` — operate on a sliding window of `(timestamp, value)` pairs
 - `func/instant.rs` + `func/udf/`: Math (abs, ceil, floor, round, sqrt, exp, ln, log2, log10, sgn), trig (sin, cos, tan, asin, acos, atan + hyperbolic variants), clamping (clamp, clamp_min, clamp_max), deg, rad — implemented as DataFusion scalar UDFs
 - `func/aggregate.rs`: `sum`, `avg`, `count`, `min`, `max`, `stddev`, `stdvar`, `group`, `topk`, `bottomk`, `quantile`, `count_values`, `limitk`, `limit_ratio`
 - `func/datetime.rs`: `time`, `timestamp`, `day_of_month`, `day_of_week`, `day_of_year`, `days_in_month`, `hour`, `minute`, `month`, `year`
@@ -109,7 +109,7 @@ The Rezolus parquet test data (`data/metrics.parquet`) has ~950 columns in wide 
 ### What's not yet implemented
 
 See `plans/functions.md` for the full list. Notable gaps:
-- Range functions: `deriv`, `predict_linear`, `sum_over_time`, `count_over_time`, `min_over_time`, `max_over_time`, `stddev_over_time`, `stdvar_over_time`, `quantile_over_time`, `last_over_time`, `present_over_time`, `changes`, `resets`, `absent_over_time`
+- Range functions: `changes`, `resets`, `absent_over_time`
 - Instant functions: `scalar`, `vector`, `absent`, `pi`
 - Histogram: `histogram_quantile`
 - Modifiers: `@` (fixed timestamp)

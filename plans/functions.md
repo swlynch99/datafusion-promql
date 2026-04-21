@@ -5,7 +5,7 @@ Last updated: 2026-04-07.
 
 ## Currently Implemented
 
-- **Range vector functions:** `rate`, `irate`, `increase`, `delta`, `idelta`, `avg_over_time`
+- **Range vector functions:** `rate`, `irate`, `increase`, `delta`, `idelta`, `deriv`, `predict_linear`, `avg_over_time`, `count_over_time`, `sum_over_time`, `min_over_time`, `max_over_time`, `stddev_over_time`, `stdvar_over_time`, `quantile_over_time`, `last_over_time`, `present_over_time`
 - **Instant vector functions (math):** `abs`, `ceil`, `floor`, `round`, `sqrt`, `exp`, `ln`, `log2`, `log10`, `sgn`
 - **Instant vector functions (trig):** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `deg`, `rad`
 - **Instant vector functions (clamping):** `clamp`, `clamp_min`, `clamp_max`
@@ -27,17 +27,6 @@ These operate on a matrix (range vector) and return an instant vector.
 
 | Function | Description |
 |----------|-------------|
-| `deriv` | Calculate the per-second derivative of a gauge time series using simple linear regression. |
-| `predict_linear` | Predict the value of a gauge `t` seconds in the future using simple linear regression over the range vector. Takes two arguments: a range vector and a scalar `t`. |
-| `sum_over_time` | Sum of all sample values in the range. |
-| `count_over_time` | Count of all samples in the range. |
-| `min_over_time` | Minimum sample value in the range. |
-| `max_over_time` | Maximum sample value in the range. |
-| `stddev_over_time` | Population standard deviation of values in the range. |
-| `stdvar_over_time` | Population variance of values in the range. |
-| `quantile_over_time` | The φ-quantile (0 ≤ φ ≤ 1) of values in the range. Takes a scalar φ and a range vector. |
-| `last_over_time` | The most recent sample value in the range. |
-| `present_over_time` | Returns value 1 for any series that has samples in the range. |
 | `changes` | Number of times the value changed within the range. |
 | `resets` | Number of counter resets (value decreases) within the range. |
 | `absent_over_time` | Returns an empty vector if the range vector has any elements, or a 1-element vector with value 1 if the range vector has no elements. |

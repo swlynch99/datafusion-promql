@@ -20,8 +20,8 @@ use datafusion::datasource::MemTable;
 use crate::datasource::MetricSource;
 use crate::error::{PromqlError, Result};
 use crate::func::{
-    AggregateFunction, RangeFunction, datetime_func_to_expr, instant_func_to_expr,
-    is_time_function, lookup_aggregate_function, lookup_datetime_function, lookup_instant_function,
+    AggregateFunction, datetime_func_to_expr, instant_func_to_expr, is_time_function,
+    lookup_aggregate_function, lookup_datetime_function, lookup_instant_function,
     lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
 use crate::node::{
@@ -206,16 +206,29 @@ async fn plan_call(
 
     // Check if this is a range vector function.
     if let Some(range_func) = lookup_range_function(func_name) {
-        // Range functions expect a MatrixSelector as the first argument.
-        // Some (like predict_linear) also take an extra scalar argument.
         if call.args.args.is_empty() {
             return Err(PromqlError::Plan(format!(
                 "{func_name}() requires at least 1 argument"
             )));
         }
 
-        let arg = &call.args.args[0];
-        let matrix = match arg.as_ref() {
+        // Determine where the matrix selector and (optional) scalar arg sit
+        // in the PromQL call. Most range functions take a range vector first
+        // (e.g. `predict_linear(v, t)`), but `quantile_over_time(φ, v)` takes
+        // the scalar first.
+        let scalar_position = range_func.scalar_arg_position();
+        let matrix_position = match scalar_position {
+            Some(0) => 1,
+            _ => 0,
+        };
+
+        if call.args.args.len() <= matrix_position {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() is missing its range vector argument"
+            )));
+        }
+
+        let matrix = match call.args.args[matrix_position].as_ref() {
             Expr::MatrixSelector(ms) => ms,
             _ => {
                 return Err(PromqlError::Plan(format!(
@@ -224,25 +237,24 @@ async fn plan_call(
             }
         };
 
-        // Extract optional scalar argument (e.g. `t` for predict_linear).
-        let scalar_arg: Option<f64> = if call.args.args.len() > 1 {
-            match call.args.args[1].as_ref() {
+        // Extract optional scalar argument at its declared position.
+        let scalar_arg: Option<f64> = match scalar_position {
+            Some(pos) if pos < call.args.args.len() => match call.args.args[pos].as_ref() {
                 Expr::NumberLiteral(lit) => Some(lit.val),
                 _ => {
                     return Err(PromqlError::Plan(format!(
-                        "{func_name}() second argument must be a scalar"
+                        "{func_name}() scalar argument must be a number literal"
                     )));
                 }
-            }
-        } else {
-            None
+            },
+            _ => None,
         };
 
-        // Validate argument count per function.
-        if range_func == RangeFunction::PredictLinear && scalar_arg.is_none() {
-            return Err(PromqlError::Plan(
-                "predict_linear() requires 2 arguments: a range vector and a scalar".into(),
-            ));
+        // Validate argument count for functions that require a scalar.
+        if scalar_position.is_some() && scalar_arg.is_none() {
+            return Err(PromqlError::Plan(format!(
+                "{func_name}() requires both a range vector and a scalar argument"
+            )));
         }
 
         let range_ns = matrix.range.as_nanos() as u64;
