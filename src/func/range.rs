@@ -21,6 +21,22 @@ pub enum RangeFunction {
     PredictLinear,
     /// Count of all samples in the range.
     CountOverTime,
+    /// Sum of all sample values in the range.
+    SumOverTime,
+    /// Minimum sample value in the range.
+    MinOverTime,
+    /// Maximum sample value in the range.
+    MaxOverTime,
+    /// Population standard deviation of values in the range.
+    StddevOverTime,
+    /// Population variance of values in the range.
+    StdvarOverTime,
+    /// Most recent sample value in the range.
+    LastOverTime,
+    /// Returns 1 if the range vector has any samples.
+    PresentOverTime,
+    /// φ-quantile of values in the range. Requires a scalar argument `φ`.
+    QuantileOverTime,
 }
 
 impl fmt::Display for RangeFunction {
@@ -35,6 +51,14 @@ impl fmt::Display for RangeFunction {
             Self::Deriv => write!(f, "deriv"),
             Self::PredictLinear => write!(f, "predict_linear"),
             Self::CountOverTime => write!(f, "count_over_time"),
+            Self::SumOverTime => write!(f, "sum_over_time"),
+            Self::MinOverTime => write!(f, "min_over_time"),
+            Self::MaxOverTime => write!(f, "max_over_time"),
+            Self::StddevOverTime => write!(f, "stddev_over_time"),
+            Self::StdvarOverTime => write!(f, "stdvar_over_time"),
+            Self::LastOverTime => write!(f, "last_over_time"),
+            Self::PresentOverTime => write!(f, "present_over_time"),
+            Self::QuantileOverTime => write!(f, "quantile_over_time"),
         }
     }
 }
@@ -51,11 +75,35 @@ pub(crate) fn lookup_range_function(name: &str) -> Option<RangeFunction> {
         "deriv" => Some(RangeFunction::Deriv),
         "predict_linear" => Some(RangeFunction::PredictLinear),
         "count_over_time" => Some(RangeFunction::CountOverTime),
+        "sum_over_time" => Some(RangeFunction::SumOverTime),
+        "min_over_time" => Some(RangeFunction::MinOverTime),
+        "max_over_time" => Some(RangeFunction::MaxOverTime),
+        "stddev_over_time" => Some(RangeFunction::StddevOverTime),
+        "stdvar_over_time" => Some(RangeFunction::StdvarOverTime),
+        "last_over_time" => Some(RangeFunction::LastOverTime),
+        "present_over_time" => Some(RangeFunction::PresentOverTime),
+        "quantile_over_time" => Some(RangeFunction::QuantileOverTime),
         _ => None,
     }
 }
 
 impl RangeFunction {
+    /// Position of the scalar argument in the PromQL call, if any.
+    ///
+    /// Returns `None` for range functions that take no scalar argument.
+    /// Otherwise returns the zero-based argument index where the scalar
+    /// appears in the PromQL source (the range vector takes the remaining
+    /// slot).
+    pub(crate) fn scalar_arg_position(&self) -> Option<usize> {
+        match self {
+            // `predict_linear(v range-vector, t scalar)`
+            Self::PredictLinear => Some(1),
+            // `quantile_over_time(φ scalar, v range-vector)`
+            Self::QuantileOverTime => Some(0),
+            _ => None,
+        }
+    }
+
     /// Evaluate the range function over a window of `(timestamp_ns, value)` samples.
     ///
     /// Samples must be sorted by timestamp. Returns `None` if there are
@@ -63,7 +111,7 @@ impl RangeFunction {
     ///
     /// `eval_ts_ns` is the evaluation timestamp in nanoseconds (used by
     /// `deriv` and `predict_linear`). `scalar_arg` is the extra scalar
-    /// argument for functions like `predict_linear`.
+    /// argument for functions like `predict_linear` and `quantile_over_time`.
     pub fn evaluate(
         &self,
         samples: &[(u64, f64)],
@@ -82,6 +130,42 @@ impl RangeFunction {
             }
             Self::CountOverTime => {
                 return Some(samples.len() as f64);
+            }
+            Self::SumOverTime => {
+                let sum: f64 = samples.iter().map(|(_, v)| v).sum();
+                return Some(sum);
+            }
+            Self::MinOverTime => {
+                let min = samples
+                    .iter()
+                    .map(|(_, v)| *v)
+                    .fold(f64::INFINITY, f64::min);
+                return Some(min);
+            }
+            Self::MaxOverTime => {
+                let max = samples
+                    .iter()
+                    .map(|(_, v)| *v)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                return Some(max);
+            }
+            Self::StddevOverTime => {
+                return Some(population_variance(samples).sqrt());
+            }
+            Self::StdvarOverTime => {
+                return Some(population_variance(samples));
+            }
+            Self::LastOverTime => {
+                // Samples are sorted by timestamp.
+                let (_, last_val) = samples[samples.len() - 1];
+                return Some(last_val);
+            }
+            Self::PresentOverTime => {
+                return Some(1.0);
+            }
+            Self::QuantileOverTime => {
+                let phi = scalar_arg.expect("quantile_over_time requires a scalar argument");
+                return Some(quantile(samples, phi));
             }
             _ => {}
         }
@@ -131,7 +215,16 @@ impl RangeFunction {
                 let (_, last_val) = samples[n - 1];
                 Some(last_val - prev_val)
             }
-            Self::AvgOverTime | Self::CountOverTime => unreachable!(),
+            Self::AvgOverTime
+            | Self::CountOverTime
+            | Self::SumOverTime
+            | Self::MinOverTime
+            | Self::MaxOverTime
+            | Self::StddevOverTime
+            | Self::StdvarOverTime
+            | Self::LastOverTime
+            | Self::PresentOverTime
+            | Self::QuantileOverTime => unreachable!(),
             Self::Deriv => {
                 let (_intercept, slope) = linear_regression(samples, eval_ts_ns);
                 Some(slope)
@@ -143,6 +236,55 @@ impl RangeFunction {
             }
         }
     }
+}
+
+/// Population variance of the sample values, computed with Welford's
+/// algorithm for numerical stability. Returns `0.0` for a single sample.
+fn population_variance(samples: &[(u64, f64)]) -> f64 {
+    let mut mean = 0.0_f64;
+    let mut m2 = 0.0_f64;
+    let mut count = 0_u64;
+    for &(_, v) in samples {
+        count += 1;
+        let delta = v - mean;
+        mean += delta / count as f64;
+        let delta2 = v - mean;
+        m2 += delta * delta2;
+    }
+    m2 / count as f64
+}
+
+/// φ-quantile of the sample values, matching Prometheus semantics:
+///
+/// - φ < 0 returns `-Inf`
+/// - φ > 1 returns `+Inf`
+/// - φ = NaN returns NaN
+/// - Otherwise performs linear interpolation between the two nearest
+///   ranks on the sorted values.
+fn quantile(samples: &[(u64, f64)], phi: f64) -> f64 {
+    if phi.is_nan() {
+        return f64::NAN;
+    }
+    if phi < 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if phi > 1.0 {
+        return f64::INFINITY;
+    }
+
+    let mut values: Vec<f64> = samples.iter().map(|(_, v)| *v).collect();
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let n = values.len();
+    if n == 1 {
+        return values[0];
+    }
+
+    let rank = phi * (n - 1) as f64;
+    let lower_idx = rank.floor() as usize;
+    let upper_idx = (lower_idx + 1).min(n - 1);
+    let weight = rank - lower_idx as f64;
+    values[lower_idx] * (1.0 - weight) + values[upper_idx] * weight
 }
 
 /// Simple linear regression over `(timestamp_ns, value)` samples.
@@ -487,5 +629,191 @@ mod tests {
                 .evaluate(&samples, 1_000_000_000, Some(10.0))
                 .is_none()
         );
+    }
+
+    fn over_time_samples() -> Vec<(u64, f64)> {
+        vec![
+            (0, 10.0),
+            (1_000_000_000, 20.0),
+            (2_000_000_000, 30.0),
+            (3_000_000_000, 40.0),
+        ]
+    }
+
+    #[test]
+    fn test_sum_over_time_basic() {
+        let result = RangeFunction::SumOverTime
+            .evaluate(&over_time_samples(), 0, None)
+            .unwrap();
+        assert!(
+            (result - 100.0).abs() < f64::EPSILON,
+            "expected 100.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_sum_over_time_single_sample() {
+        let samples = vec![(1_000_000_000, 42.0)];
+        let result = RangeFunction::SumOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
+        assert!(
+            (result - 42.0).abs() < f64::EPSILON,
+            "expected 42.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_min_over_time_basic() {
+        let samples = vec![
+            (0, 20.0),
+            (1_000_000_000, 5.0),
+            (2_000_000_000, 15.0),
+            (3_000_000_000, 10.0),
+        ];
+        let result = RangeFunction::MinOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
+        assert!(
+            (result - 5.0).abs() < f64::EPSILON,
+            "expected 5.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_max_over_time_basic() {
+        let samples = vec![
+            (0, 20.0),
+            (1_000_000_000, 5.0),
+            (2_000_000_000, 35.0),
+            (3_000_000_000, 10.0),
+        ];
+        let result = RangeFunction::MaxOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
+        assert!(
+            (result - 35.0).abs() < f64::EPSILON,
+            "expected 35.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_stdvar_over_time_basic() {
+        // Values: 10, 20, 30, 40. Mean = 25. Variance = ((15^2)+(5^2)+(5^2)+(15^2))/4 = 500/4 = 125
+        let result = RangeFunction::StdvarOverTime
+            .evaluate(&over_time_samples(), 0, None)
+            .unwrap();
+        assert!(
+            (result - 125.0).abs() < 1e-9,
+            "expected 125.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_stddev_over_time_basic() {
+        // sqrt(125) ≈ 11.180339887498949
+        let result = RangeFunction::StddevOverTime
+            .evaluate(&over_time_samples(), 0, None)
+            .unwrap();
+        assert!(
+            (result - 125.0_f64.sqrt()).abs() < 1e-9,
+            "expected sqrt(125), got {result}"
+        );
+    }
+
+    #[test]
+    fn test_stddev_over_time_single_sample() {
+        let samples = vec![(1_000_000_000, 42.0)];
+        let result = RangeFunction::StddevOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
+        assert!(result.abs() < f64::EPSILON, "expected 0.0, got {result}");
+    }
+
+    #[test]
+    fn test_last_over_time_basic() {
+        // Samples are assumed sorted by timestamp.
+        let result = RangeFunction::LastOverTime
+            .evaluate(&over_time_samples(), 0, None)
+            .unwrap();
+        assert!(
+            (result - 40.0).abs() < f64::EPSILON,
+            "expected 40.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_last_over_time_single_sample() {
+        let samples = vec![(1_000_000_000, 42.0)];
+        let result = RangeFunction::LastOverTime
+            .evaluate(&samples, 0, None)
+            .unwrap();
+        assert!(
+            (result - 42.0).abs() < f64::EPSILON,
+            "expected 42.0, got {result}"
+        );
+    }
+
+    #[test]
+    fn test_present_over_time_returns_one() {
+        let result = RangeFunction::PresentOverTime
+            .evaluate(&over_time_samples(), 0, None)
+            .unwrap();
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_present_over_time_empty() {
+        let samples: Vec<(u64, f64)> = vec![];
+        assert!(
+            RangeFunction::PresentOverTime
+                .evaluate(&samples, 0, None)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_quantile_over_time_median() {
+        // Sorted values: 10, 20, 30, 40. φ=0.5 → interpolate between index 1
+        // and 2: 0.5 * (20 + 30) = 25.
+        let result = RangeFunction::QuantileOverTime
+            .evaluate(&over_time_samples(), 0, Some(0.5))
+            .unwrap();
+        assert!((result - 25.0).abs() < 1e-9, "expected 25.0, got {result}");
+    }
+
+    #[test]
+    fn test_quantile_over_time_endpoints() {
+        let min = RangeFunction::QuantileOverTime
+            .evaluate(&over_time_samples(), 0, Some(0.0))
+            .unwrap();
+        assert!((min - 10.0).abs() < f64::EPSILON);
+
+        let max = RangeFunction::QuantileOverTime
+            .evaluate(&over_time_samples(), 0, Some(1.0))
+            .unwrap();
+        assert!((max - 40.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_quantile_over_time_out_of_range() {
+        let neg = RangeFunction::QuantileOverTime
+            .evaluate(&over_time_samples(), 0, Some(-0.1))
+            .unwrap();
+        assert!(neg.is_infinite() && neg < 0.0);
+
+        let pos = RangeFunction::QuantileOverTime
+            .evaluate(&over_time_samples(), 0, Some(1.1))
+            .unwrap();
+        assert!(pos.is_infinite() && pos > 0.0);
+    }
+
+    #[test]
+    fn test_quantile_over_time_single_sample() {
+        let samples = vec![(1_000_000_000, 42.0)];
+        let result = RangeFunction::QuantileOverTime
+            .evaluate(&samples, 0, Some(0.75))
+            .unwrap();
+        assert!((result - 42.0).abs() < f64::EPSILON);
     }
 }

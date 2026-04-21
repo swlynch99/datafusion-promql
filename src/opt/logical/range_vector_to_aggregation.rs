@@ -57,9 +57,14 @@ impl OptimizerRule for RangeVectorToAggregation {
         let func = func_eval.func;
 
         // Functions that require the evaluation timestamp or scalar arguments
-        // (deriv, predict_linear) cannot be decomposed into a simple UDAF
-        // aggregation — keep them on the custom RangeFunctionExec path.
-        if matches!(func, RangeFunction::Deriv | RangeFunction::PredictLinear) {
+        // (deriv, predict_linear, quantile_over_time) cannot be decomposed
+        // into a simple UDAF aggregation — keep them on the custom
+        // RangeFunctionExec path which passes the scalar through to
+        // `RangeFunction::evaluate`.
+        if matches!(
+            func,
+            RangeFunction::Deriv | RangeFunction::PredictLinear | RangeFunction::QuantileOverTime
+        ) {
             return Ok(Transformed::no(plan));
         }
 
