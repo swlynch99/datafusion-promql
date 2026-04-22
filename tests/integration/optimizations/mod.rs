@@ -1,3 +1,4 @@
+mod dedupe_subplans;
 mod fold_redundant_aggregation;
 mod lift_constant_projections;
 mod push_instant_eval_through_union;
