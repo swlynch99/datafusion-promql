@@ -55,6 +55,7 @@ impl PromqlPlanner {
     pub fn new(source: Arc<dyn MetricSource>) -> Self {
         let state = SessionStateBuilder::new()
             .with_default_features()
+            .with_optimizer_rule(Arc::new(crate::opt::logical::DeduplicateSubplans))
             .with_optimizer_rule(Arc::new(crate::opt::logical::InstantFuncToProjection))
             .with_optimizer_rule(Arc::new(crate::opt::logical::DateTimeFuncToProjection))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RangeVectorToAggregation))

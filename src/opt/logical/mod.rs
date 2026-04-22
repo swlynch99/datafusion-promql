@@ -1,4 +1,5 @@
 mod datetime_func_to_projection;
+mod dedupe_subplans;
 mod fold_redundant_aggregation;
 mod instant_func_to_projection;
 mod lift_constant_projections;
@@ -9,6 +10,7 @@ mod range_vector_to_aggregation;
 mod remove_noop_projections;
 
 pub use datetime_func_to_projection::DateTimeFuncToProjection;
+pub use dedupe_subplans::{DeduplicateSubplans, subplan_fingerprint};
 pub use fold_redundant_aggregation::FoldRedundantAggregation;
 pub use instant_func_to_projection::InstantFuncToProjection;
 pub use lift_constant_projections::LiftConstantProjections;
