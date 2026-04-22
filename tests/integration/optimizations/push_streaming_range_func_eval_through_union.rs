@@ -60,7 +60,7 @@ fn wrap_streaming_range_func(input: LogicalPlan, label_columns: Vec<String>) -> 
         0,
         0,
         0,
-        label_columns,
+        Arc::new(label_columns),
         None,
     )
     .expect("failed to create StreamingRangeFunctionEval");
@@ -301,7 +301,7 @@ fn test_push_down_preserves_parameters() {
         10_000_000_000, // end_ns
         1_000_000_000,  // step_ns
         5_000_000_000,  // offset_ns
-        vec!["job".to_string()],
+        Arc::new(vec!["job".to_string()]),
         Some(99_000_000_000), // at_timestamp_ns
     )
     .expect("failed to create StreamingRangeFunctionEval");
@@ -333,7 +333,7 @@ fn test_push_down_preserves_parameters() {
         assert_eq!(eval.end_ns, 10_000_000_000);
         assert_eq!(eval.step_ns, 1_000_000_000);
         assert_eq!(eval.offset_ns, 5_000_000_000);
-        assert_eq!(eval.label_columns, vec!["job".to_string()]);
+        assert_eq!(*eval.label_columns, vec!["job".to_string()]);
         assert_eq!(eval.at_timestamp_ns, Some(99_000_000_000));
     }
 }

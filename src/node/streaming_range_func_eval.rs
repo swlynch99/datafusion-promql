@@ -44,7 +44,7 @@ pub struct StreamingRangeFunctionEval {
     /// Offset in nanoseconds (positive = shift window into the past).
     pub offset_ns: i64,
     /// Label columns used to group series.
-    pub label_columns: Vec<String>,
+    pub label_columns: Arc<Vec<String>>,
     /// Fixed `@`-modifier timestamp (ns). When set, every eval timestamp uses
     /// this as the window anchor instead of the eval timestamp itself.
     pub at_timestamp_ns: Option<u64>,
@@ -64,7 +64,7 @@ impl StreamingRangeFunctionEval {
         end_ns: u64,
         step_ns: u64,
         offset_ns: i64,
-        label_columns: Vec<String>,
+        label_columns: Arc<Vec<String>>,
         at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
         let output_schema = compute_output_schema(&input, &label_columns)?;
@@ -151,7 +151,17 @@ impl UserDefinedLogicalNodeCore for StreamingRangeFunctionEval {
     ) -> datafusion::common::Result<Self> {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
-            ..self.clone()
+            func: self.func,
+            scalar_arg: self.scalar_arg,
+            range_ns: self.range_ns,
+            eval_ts_ns: self.eval_ts_ns,
+            start_ns: self.start_ns,
+            end_ns: self.end_ns,
+            step_ns: self.step_ns,
+            offset_ns: self.offset_ns,
+            label_columns: Arc::clone(&self.label_columns),
+            at_timestamp_ns: self.at_timestamp_ns,
+            output_schema: Arc::clone(&self.output_schema),
         })
     }
 

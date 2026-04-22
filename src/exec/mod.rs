@@ -53,7 +53,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.timestamp_ns,
                 eval.lookback_ns,
                 eval.offset_ns,
-                eval.label_columns.clone(),
+                (*eval.label_columns).clone(),
                 eval.at_timestamp_ns,
             );
             return Ok(Some(Arc::new(exec)));
@@ -68,7 +68,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.step_ns,
                 eval.lookback_ns,
                 eval.offset_ns,
-                eval.label_columns.clone(),
+                (*eval.label_columns).clone(),
                 eval.at_timestamp_ns,
             );
             return Ok(Some(Arc::new(exec)));
@@ -84,7 +84,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.end_ns,
                 eval.step_ns,
                 eval.offset_ns,
-                eval.label_columns.clone(),
+                (*eval.label_columns).clone(),
                 eval.at_timestamp_ns,
             );
             return Ok(Some(Arc::new(exec)));
@@ -100,7 +100,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.eval_timestamps(),
                 eval.offset_ns,
                 eval.at_timestamp_ns,
-                eval.label_columns.clone(),
+                (*eval.label_columns).clone(),
             );
             return Ok(Some(Arc::new(exec)));
         }
@@ -154,8 +154,11 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
 
         if let Some(unpack) = node.as_any().downcast_ref::<WideUnpack>() {
             let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
-            let exec =
-                WideUnpackExec::new(child, unpack.columns.clone(), unpack.label_keys.clone());
+            let exec = WideUnpackExec::new(
+                child,
+                (*unpack.columns).clone(),
+                (*unpack.label_keys).clone(),
+            );
             return Ok(Some(Arc::new(exec)));
         }
 

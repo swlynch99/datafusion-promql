@@ -44,9 +44,9 @@ pub struct WideUnpack {
     /// The wide-format input plan.
     pub input: LogicalPlan,
     /// Metadata for each value column to unpack.
-    pub columns: Vec<WideColumnMeta>,
+    pub columns: Arc<Vec<WideColumnMeta>>,
     /// The union of all label keys across all columns, sorted.
-    pub label_keys: Vec<String>,
+    pub label_keys: Arc<Vec<String>>,
     /// Output schema: (timestamp, value, __name__, label_key_0, ...).
     pub output_schema: DFSchemaRef,
 }
@@ -54,8 +54,8 @@ pub struct WideUnpack {
 impl WideUnpack {
     pub fn new(
         input: LogicalPlan,
-        columns: Vec<WideColumnMeta>,
-        label_keys: Vec<String>,
+        columns: Arc<Vec<WideColumnMeta>>,
+        label_keys: Arc<Vec<String>>,
     ) -> Result<Self> {
         let output_schema = compute_output_schema(&input, &label_keys)?;
         Ok(Self {
@@ -133,7 +133,7 @@ impl UserDefinedLogicalNodeCore for WideUnpack {
         let mut cols = HashSet::new();
         cols.insert("value".to_string());
         cols.insert("__name__".to_string());
-        for key in &self.label_keys {
+        for key in self.label_keys.iter() {
             cols.insert(key.clone());
         }
         cols

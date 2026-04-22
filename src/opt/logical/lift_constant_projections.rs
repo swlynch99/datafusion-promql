@@ -354,7 +354,7 @@ fn rewrite_instant_vector_eval(plan: LogicalPlan) -> Result<Transformed<LogicalP
         eval.timestamp_ns,
         eval.lookback_ns,
         eval.offset_ns,
-        new_label_columns,
+        Arc::new(new_label_columns),
         eval.at_timestamp_ns,
     );
     let eval_plan = LogicalPlan::Extension(Extension {
@@ -452,7 +452,7 @@ fn rewrite_step_vector_eval(plan: LogicalPlan) -> Result<Transformed<LogicalPlan
         eval.step_ns,
         eval.lookback_ns,
         eval.offset_ns,
-        new_label_columns,
+        Arc::new(new_label_columns),
         eval.at_timestamp_ns,
     );
     let eval_plan = LogicalPlan::Extension(Extension {
@@ -557,7 +557,7 @@ fn rewrite_streaming_range_func_eval(plan: LogicalPlan) -> Result<Transformed<Lo
         eval.end_ns,
         eval.step_ns,
         eval.offset_ns,
-        new_label_columns,
+        Arc::new(new_label_columns),
         eval.at_timestamp_ns,
     )
     .map_err(|e| datafusion::error::DataFusionError::Plan(e.to_string()))?;

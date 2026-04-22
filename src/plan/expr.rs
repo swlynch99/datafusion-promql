@@ -109,6 +109,7 @@ pub async fn plan_expr(
             let (child_plan, label_columns) =
                 plan_vector_selector(vs, source, fetch_range, 0, offset_ns).await?;
 
+            let label_columns = Arc::new(label_columns);
             if let Some(ts) = params.eval_ts_ns {
                 let node = InstantVectorEval::new(
                     child_plan,
@@ -276,6 +277,7 @@ async fn plan_call(
             plan_vector_selector(&matrix.vs, source, fetch_range, range_ns, offset_ns).await?;
 
         // Wrap in RangeVectorEval (windowing) then RangeFunctionEval (function).
+        let label_columns = Arc::new(label_columns);
         let window_node = if let Some(ts) = params.eval_ts_ns {
             RangeVectorEval::instant(child_plan, ts, range_ns, offset_ns, label_columns, at_ns)?
         } else {

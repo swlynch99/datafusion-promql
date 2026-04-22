@@ -192,7 +192,11 @@ pub(crate) fn plan_wide_single_scan(
         })
         .collect();
 
-    let unpack = WideUnpack::new(plan, column_metas, all_label_keys.clone())?;
+    let unpack = WideUnpack::new(
+        plan,
+        Arc::new(column_metas),
+        Arc::new(all_label_keys.clone()),
+    )?;
     let unpack_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(unpack),
     });
