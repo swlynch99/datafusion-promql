@@ -20,7 +20,7 @@ use datafusion_promql::datasource::{
     ColumnMapping, Matcher, MetricMeta, MetricSource, TableFormat,
 };
 use datafusion_promql::parquet::{rezolus_column_mapping, rezolus_parse_column};
-use datafusion_promql::types::{QueryResult, TimeRange};
+use datafusion_promql::types::{Labels, QueryResult, TimeRange};
 
 // ---------------------------------------------------------------------------
 // Test helper: RezolusMockSource
@@ -166,7 +166,7 @@ fn engine(source: RezolusMockSource) -> PromqlEngine {
 }
 
 /// Extract vector samples sorted by a key for deterministic assertions.
-fn sorted_vector(result: QueryResult) -> Vec<(std::collections::BTreeMap<String, String>, f64)> {
+fn sorted_vector(result: QueryResult) -> Vec<(Labels, f64)> {
     match result {
         QueryResult::Vector(mut samples) => {
             samples.sort_by(|a, b| a.labels.cmp(&b.labels));
