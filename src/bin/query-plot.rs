@@ -5,7 +5,7 @@ use clap::Parser;
 
 use datafusion_promql::PromqlEngine;
 use datafusion_promql::parquet::{ParquetMetricSource, read_timestamp_range};
-use datafusion_promql::types::QueryResult;
+use datafusion_promql::types::{Labels, QueryResult};
 
 use textplots::{Chart, ColorPlot, Shape};
 
@@ -53,7 +53,7 @@ fn terminal_dimensions() -> (u32, u32) {
 }
 
 /// Format a label set into a compact series name like `{instance="host1", job="node"}`.
-fn format_labels(labels: &std::collections::BTreeMap<String, String>) -> String {
+fn format_labels(labels: &Labels) -> String {
     if labels.is_empty() {
         return "{}".to_string();
     }
