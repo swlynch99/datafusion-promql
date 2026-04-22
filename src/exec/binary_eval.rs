@@ -10,6 +10,9 @@ use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::Distribution;
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
@@ -38,6 +41,7 @@ pub(crate) struct BinaryExec {
     rhs_label_columns: Vec<String>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl BinaryExec {
@@ -83,6 +87,7 @@ impl BinaryExec {
             rhs_label_columns,
             output_schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -265,6 +270,7 @@ impl ExecutionPlan for BinaryExec {
         let matching = self.matching.clone();
         let lhs_label_columns = self.lhs_label_columns.clone();
         let rhs_label_columns = self.rhs_label_columns.clone();
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // Determine output label names (everything except timestamp/value in output schema).
         let output_labels: Vec<String> = output_schema
@@ -289,6 +295,9 @@ impl ExecutionPlan for BinaryExec {
             while let Some(b) = s.next().await {
                 rhs_batches.push(b?);
             }
+
+            // Time only the synchronous processing that follows.
+            let _timer = baseline_metrics.elapsed_compute().timer();
 
             let (lhs_series, lhs_match_to_full) =
                 collect_series(&lhs_batches, &lhs_label_columns, &matching);
@@ -456,13 +465,17 @@ impl ExecutionPlan for BinaryExec {
             }
 
             let batch = RecordBatch::try_new(output_schema, columns)?;
-            Ok(batch)
+            Ok(batch.record_output(&baseline_metrics))
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
@@ -480,6 +493,7 @@ pub(crate) struct ScalarBinaryExec {
     return_bool: bool,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl ScalarBinaryExec {
@@ -506,6 +520,7 @@ impl ScalarBinaryExec {
             return_bool,
             output_schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -578,6 +593,7 @@ impl ExecutionPlan for ScalarBinaryExec {
         let scalar_value = self.scalar_value;
         let scalar_is_lhs = self.scalar_is_lhs;
         let return_bool = self.return_bool;
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // Output label columns (everything except timestamp/value in output schema).
         let output_labels: Vec<String> = output_schema
@@ -595,6 +611,9 @@ impl ExecutionPlan for ScalarBinaryExec {
             while let Some(b) = s.next().await {
                 batches.push(b?);
             }
+
+            // Time only the synchronous processing that follows.
+            let _timer = baseline_metrics.elapsed_compute().timer();
 
             let mut out_ts = UInt64Builder::new();
             let mut out_val = Float64Builder::new();
@@ -661,12 +680,16 @@ impl ExecutionPlan for ScalarBinaryExec {
             }
 
             let batch = RecordBatch::try_new(output_schema, columns)?;
-            Ok(batch)
+            Ok(batch.record_output(&baseline_metrics))
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }

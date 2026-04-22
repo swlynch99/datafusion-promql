@@ -10,6 +10,9 @@ use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
 use datafusion::physical_plan::Distribution;
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
@@ -38,6 +41,7 @@ pub(crate) struct RangeVectorExec {
     at_timestamp_ns: Option<u64>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 /// Build the output Arrow schema for the windowing node.
@@ -100,6 +104,7 @@ impl RangeVectorExec {
             at_timestamp_ns,
             output_schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -184,6 +189,7 @@ impl ExecutionPlan for RangeVectorExec {
         let offset_ns = self.offset_ns;
         let label_columns = self.label_columns.clone();
         let at_timestamp_ns = self.at_timestamp_ns;
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         let stream = futures::stream::once(async move {
             use futures::StreamExt;
@@ -194,6 +200,9 @@ impl ExecutionPlan for RangeVectorExec {
             while let Some(batch_result) = stream.next().await {
                 batches.push(batch_result?);
             }
+
+            // Time only the synchronous processing that follows.
+            let _timer = baseline_metrics.elapsed_compute().timer();
 
             // Build a map: series_key -> Vec<(timestamp, value)>
             let mut series_map: HashMap<Vec<String>, Vec<(u64, f64)>> = HashMap::new();
@@ -303,12 +312,16 @@ impl ExecutionPlan for RangeVectorExec {
             }
 
             let batch = RecordBatch::try_new(output_schema, columns)?;
-            Ok(batch)
+            Ok(batch.record_output(&baseline_metrics))
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
