@@ -1,15 +1,19 @@
-use std::collections::BTreeSet;
+use std::any::Any;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use async_trait::async_trait;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{Session, TableProvider};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
+use datafusion::error::Result as DFResult;
+use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::file::reader::FileReader;
@@ -38,6 +42,13 @@ pub struct ParquetMetricSource {
     /// row-group statistics during initialization.  `None` when the file has no
     /// timestamp column or carries no row-group statistics.
     timestamp_range_ns: Option<(u64, u64)>,
+    /// Pre-computed mapping from metric name to the column indices in the full
+    /// schema that belong to that metric.  Built once at init time by iterating
+    /// the schema with `ColumnMapping::parse_column` so that `table_for_metric`
+    /// can construct a narrow schema without re-walking all columns.
+    metric_column_indices: HashMap<String, Vec<usize>>,
+    /// Index of the timestamp column in the full schema.
+    timestamp_col_idx: usize,
 }
 
 impl ParquetMetricSource {
@@ -82,6 +93,8 @@ impl ParquetMetricSource {
 
         let column_mapping = rezolus_column_mapping();
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
+        let (metric_column_indices, timestamp_col_idx) =
+            build_metric_column_indices(&table_provider, &column_mapping);
 
         // Cache the timestamp range from row-group statistics so callers can
         // use it as default query bounds without a separate read_timestamp_range
@@ -94,6 +107,8 @@ impl ParquetMetricSource {
             column_mapping,
             metrics,
             timestamp_range_ns,
+            metric_column_indices,
+            timestamp_col_idx,
         })
     }
 
@@ -113,15 +128,42 @@ impl ParquetMetricSource {
 impl MetricSource for ParquetMetricSource {
     async fn table_for_metric(
         &self,
-        _metric_name: &str,
+        metric_name: &str,
         _matchers: &[Matcher],
         _time_range: TimeRange,
     ) -> Result<(Arc<dyn TableProvider>, TableFormat)> {
-        // Return the full table; the normalize layer will project only the
-        // relevant columns and DataFusion will push that down to the parquet
-        // reader.
+        // Build a narrow schema containing only the timestamp column plus the
+        // columns that belong to this metric.  This avoids cloning the full
+        // 100k-column schema at every planning stage (FilterExec, optimizer,
+        // physical planner) for what is a handful of columns per metric.
+        let full_schema = self.table_provider.schema();
+        let metric_indices = self
+            .metric_column_indices
+            .get(metric_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+
+        let mut narrow_fields: Vec<FieldRef> = Vec::with_capacity(1 + metric_indices.len());
+        let mut index_map: Vec<usize> = Vec::with_capacity(1 + metric_indices.len());
+
+        // Timestamp column is always first.
+        narrow_fields.push(full_schema.fields()[self.timestamp_col_idx].clone());
+        index_map.push(self.timestamp_col_idx);
+
+        for &idx in metric_indices {
+            narrow_fields.push(full_schema.fields()[idx].clone());
+            index_map.push(idx);
+        }
+
+        let narrow_schema = Arc::new(Schema::new(narrow_fields));
+        let narrow_provider: Arc<dyn TableProvider> = Arc::new(NarrowTableProvider {
+            inner: Arc::clone(&self.table_provider),
+            narrow_schema,
+            index_map,
+        });
+
         Ok((
-            Arc::clone(&self.table_provider),
+            narrow_provider,
             TableFormat::Wide(self.column_mapping.clone()),
         ))
     }
@@ -293,6 +335,42 @@ fn build_metric_metadata(
         .collect()
 }
 
+/// Pre-compute a mapping from metric name to the column indices (in the full
+/// schema) that parse to that metric under `mapping.parse_column`.
+///
+/// Returns `(metric_column_indices, timestamp_col_idx)`.  Called once during
+/// [`ParquetMetricSource::try_new_with_schema`] so that `table_for_metric` can
+/// build narrow schemas in O(matched columns) rather than O(all columns).
+fn build_metric_column_indices(
+    provider: &Arc<dyn TableProvider>,
+    mapping: &ColumnMapping,
+) -> (HashMap<String, Vec<usize>>, usize) {
+    let schema = provider.schema();
+    let ignore: BTreeSet<&str> = mapping.ignore_columns.iter().map(|s| s.as_str()).collect();
+
+    let ts_idx = schema.index_of(&mapping.timestamp_column).unwrap_or(0);
+
+    let mut metric_map: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (idx, field) in schema.fields().iter().enumerate() {
+        let col_name = field.name().as_str();
+        if col_name == mapping.timestamp_column || ignore.contains(col_name) {
+            continue;
+        }
+
+        match field.data_type() {
+            DataType::UInt64 | DataType::Int64 | DataType::Float64 => {}
+            _ => continue,
+        }
+
+        if let Some((metric_name, _)) = (mapping.parse_column)(field.as_ref()) {
+            metric_map.entry(metric_name).or_default().push(idx);
+        }
+    }
+
+    (metric_map, ts_idx)
+}
+
 /// Read the Arrow schema from a parquet file's footer metadata.
 ///
 /// The returned schema can be passed to
@@ -359,6 +437,66 @@ pub fn read_timestamp_range(path: impl AsRef<Path>) -> Result<(u64, u64)> {
         _ => Err(PromqlError::DataSource(
             "no timestamp statistics found in parquet metadata".into(),
         )),
+    }
+}
+
+/// A [`TableProvider`] wrapper that presents a narrow subset of the underlying
+/// table's schema to DataFusion's planner.
+///
+/// On wide parquet files with tens-of-thousands of columns, DataFusion's plan
+/// stages (logical optimizer, `FilterExec::compute_properties`,
+/// `DefaultPhysicalPlanner`) clone the full `Arc<Schema>` many times.
+/// `NarrowTableProvider` exposes only the timestamp column plus the columns for
+/// one specific metric, so those clones are cheap.
+///
+/// `scan()` remaps projection indices from the narrow schema back to the
+/// underlying full-schema indices, preserving parquet column-chunk pushdown.
+#[derive(Debug)]
+struct NarrowTableProvider {
+    inner: Arc<dyn TableProvider>,
+    narrow_schema: Arc<Schema>,
+    /// `index_map[i]` is the column index in the inner provider's full schema
+    /// that corresponds to column `i` in `narrow_schema`.
+    index_map: Vec<usize>,
+}
+
+#[async_trait]
+impl TableProvider for NarrowTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.narrow_schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        // Remap narrow-schema projection indices to full-schema indices so the
+        // underlying parquet reader knows which column chunks to read.
+        let full_projection: Vec<usize> = match projection {
+            Some(p) => p.iter().map(|&i| self.index_map[i]).collect(),
+            None => self.index_map.clone(),
+        };
+        self.inner
+            .scan(state, Some(&full_projection), filters, limit)
+            .await
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DFResult<Vec<TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filters)
     }
 }
 
