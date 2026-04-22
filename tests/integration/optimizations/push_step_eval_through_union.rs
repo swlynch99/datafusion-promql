@@ -56,7 +56,7 @@ fn wrap_step_eval(input: LogicalPlan, label_columns: Vec<String>) -> LogicalPlan
         10_000_000_000,  // step_ns: 10s
         300_000_000_000, // lookback_ns: 5min
         0,               // offset_ns
-        label_columns,
+        Arc::new(label_columns),
         None,
     );
     LogicalPlan::Extension(Extension {
@@ -285,7 +285,7 @@ fn test_push_down_preserves_parameters() {
         5_000_000_000,  // step_ns
         30_000_000_000, // lookback_ns
         -2_000_000_000, // offset_ns
-        vec!["job".to_string()],
+        Arc::new(vec!["job".to_string()]),
         Some(42_000_000_000), // at_timestamp_ns
     );
     let plan = LogicalPlan::Extension(Extension {
@@ -309,7 +309,7 @@ fn test_push_down_preserves_parameters() {
         assert_eq!(eval.step_ns, 5_000_000_000);
         assert_eq!(eval.lookback_ns, 30_000_000_000);
         assert_eq!(eval.offset_ns, -2_000_000_000);
-        assert_eq!(eval.label_columns, vec!["job".to_string()]);
+        assert_eq!(*eval.label_columns, vec!["job".to_string()]);
         assert_eq!(eval.at_timestamp_ns, Some(42_000_000_000));
     }
 }

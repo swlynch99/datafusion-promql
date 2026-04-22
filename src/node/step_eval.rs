@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use datafusion::common::DFSchemaRef;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
@@ -27,7 +28,7 @@ pub struct StepVectorEval {
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
     pub offset_ns: i64,
     /// Label column names used for grouping series (excludes timestamp/value).
-    pub label_columns: Vec<String>,
+    pub label_columns: Arc<Vec<String>>,
     /// Fixed lookup timestamp from the `@` modifier (ns). When set, every step
     /// uses this timestamp for lookup instead of the step timestamp, but the
     /// output is still reported at each step timestamp.
@@ -43,7 +44,7 @@ impl StepVectorEval {
         step_ns: u64,
         lookback_ns: u64,
         offset_ns: i64,
-        label_columns: Vec<String>,
+        label_columns: Arc<Vec<String>>,
         at_timestamp_ns: Option<u64>,
     ) -> Self {
         Self {

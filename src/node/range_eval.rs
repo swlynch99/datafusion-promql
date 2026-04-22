@@ -31,7 +31,7 @@ pub(crate) struct RangeVectorEval {
     /// Offset in nanoseconds. Positive shifts the lookup window into the past.
     pub offset_ns: i64,
     /// Label column names used for grouping series.
-    pub label_columns: Vec<String>,
+    pub label_columns: Arc<Vec<String>>,
     /// Output schema: timestamp, timestamps (list), values (list), labels.
     pub output_schema: DFSchemaRef,
     /// Fixed lookup timestamp from the `@` modifier (ns). When set, the window
@@ -86,7 +86,7 @@ impl RangeVectorEval {
         timestamp_ns: u64,
         range_ns: u64,
         offset_ns: i64,
-        label_columns: Vec<String>,
+        label_columns: Arc<Vec<String>>,
         at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;
@@ -113,7 +113,7 @@ impl RangeVectorEval {
         step_ns: u64,
         range_ns: u64,
         offset_ns: i64,
-        label_columns: Vec<String>,
+        label_columns: Arc<Vec<String>>,
         at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
         let output_schema = compute_range_vector_schema(&input, &label_columns)?;

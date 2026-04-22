@@ -896,7 +896,7 @@ fn wrap_in_instant_vector_eval(input: LogicalPlan, label_columns: Vec<String>) -
         1_000_000_000,   // timestamp_ns
         300_000_000_000, // lookback_ns (5 min)
         0,               // offset_ns
-        label_columns,
+        Arc::new(label_columns),
         None,
     );
     LogicalPlan::Extension(Extension {
@@ -946,7 +946,7 @@ fn test_instant_vector_eval_lifts_constants() {
         .expect("expected InstantVectorEval");
 
     // __name__ should be removed from label_columns.
-    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+    assert_eq!(*eval.label_columns, vec!["host".to_string()]);
 
     // Inner projection should have 3 columns (timestamp, value, host).
     let LogicalPlan::Projection(ref inner_proj) = eval.input else {
@@ -1147,7 +1147,7 @@ fn wrap_in_step_vector_eval(input: LogicalPlan, label_columns: Vec<String>) -> L
         10_000_000_000,  // step_ns: 10s
         300_000_000_000, // lookback_ns (5 min)
         0,               // offset_ns
-        label_columns,
+        Arc::new(label_columns),
         None,
     );
     LogicalPlan::Extension(Extension {
@@ -1198,7 +1198,7 @@ fn test_step_vector_eval_lifts_constants() {
         .expect("expected StepVectorEval");
 
     // __name__ should be removed from label_columns.
-    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+    assert_eq!(*eval.label_columns, vec!["host".to_string()]);
 
     // Inner projection should have 3 columns (timestamp, value, host).
     let LogicalPlan::Projection(ref inner_proj) = eval.input else {
@@ -1287,7 +1287,7 @@ fn test_step_vector_eval_preserves_parameters() {
         5_000_000_000,
         30_000_000_000,
         -2_000_000_000,
-        vec!["__name__".to_string(), "env".to_string()],
+        Arc::new(vec!["__name__".to_string(), "env".to_string()]),
         Some(42_000_000_000),
     );
     let plan = LogicalPlan::Extension(Extension {
@@ -1315,7 +1315,7 @@ fn test_step_vector_eval_preserves_parameters() {
     assert_eq!(eval.lookback_ns, 30_000_000_000);
     assert_eq!(eval.offset_ns, -2_000_000_000);
     assert_eq!(eval.at_timestamp_ns, Some(42_000_000_000));
-    assert_eq!(eval.label_columns, Vec::<String>::new()); // both lifted
+    assert_eq!(*eval.label_columns, Vec::<String>::new()); // both lifted
 }
 
 /// Composed: StepVectorEval over Union with shared constants should lift
@@ -1363,7 +1363,7 @@ fn test_composed_step_vector_eval_over_union() {
         .as_any()
         .downcast_ref::<StepVectorEval>()
         .expect("expected StepVectorEval");
-    assert_eq!(eval.label_columns, vec!["host".to_string()]);
+    assert_eq!(*eval.label_columns, vec!["host".to_string()]);
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

@@ -98,7 +98,7 @@ impl OptimizerRule for RangeVectorToAggregation {
         let range_ns = eval.range_ns;
         let offset_ns = eval.offset_ns;
         let at_timestamp_ns = eval.at_timestamp_ns;
-        let label_columns = &eval.label_columns;
+        let label_columns: &Vec<String> = &eval.label_columns;
 
         // Use the RangeFunctionEval's output schema as the target.
         let original_schema = func_eval.output_schema.clone();
