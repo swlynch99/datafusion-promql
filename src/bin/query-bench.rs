@@ -92,6 +92,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
+    let only = args
+        .iter()
+        .position(|a| a == "--only")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
 
     let (min_ns, max_ns) = read_timestamp_range(&file)?;
     let source = Arc::new(ParquetMetricSource::try_new(&file).await?);
@@ -133,6 +138,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     for (name, q) in &queries {
+        if let Some(filter) = &only {
+            if filter != name {
+                continue;
+            }
+        }
         let mut p = bench_range(&planner, &engine, q, start_ns, end_ns, step_s, iters).await;
         println!(
             "{name:<16} {:>10.2} {:>10.2} {:>10.2} {:>10.2} {:>10.2}",
