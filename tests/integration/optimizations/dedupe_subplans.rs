@@ -55,10 +55,10 @@ fn apply_rule(plan: LogicalPlan) -> (LogicalPlan, bool) {
 fn count_extension_nodes(plan: &LogicalPlan, target_name: &str) -> usize {
     let mut total = 0;
     plan.apply(|node| {
-        if let LogicalPlan::Extension(ext) = node {
-            if ext.node.name() == target_name {
-                total += 1;
-            }
+        if let LogicalPlan::Extension(ext) = node
+            && ext.node.name() == target_name
+        {
+            total += 1;
         }
         Ok(TreeNodeRecursion::Continue)
     })
@@ -75,10 +75,10 @@ fn count_extension_nodes(plan: &LogicalPlan, target_name: &str) -> usize {
 fn count_unique_fingerprints(plan: &LogicalPlan, target_name: &str) -> usize {
     let mut seen: HashSet<String> = HashSet::new();
     plan.apply(|node| {
-        if let LogicalPlan::Extension(ext) = node {
-            if ext.node.name() == target_name {
-                seen.insert(subplan_fingerprint(node));
-            }
+        if let LogicalPlan::Extension(ext) = node
+            && ext.node.name() == target_name
+        {
+            seen.insert(subplan_fingerprint(node));
         }
         Ok(TreeNodeRecursion::Continue)
     })
