@@ -1462,6 +1462,7 @@ dependencies = [
  "promql-parser",
  "regex",
  "rgb",
+ "smallvec",
  "terminal_size",
  "textplots",
  "thiserror",
