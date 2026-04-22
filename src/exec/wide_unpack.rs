@@ -1,13 +1,18 @@
 use std::any::Any;
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Array, Float64Builder, StringBuilder, UInt64Builder};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    ConstExpr, EquivalenceProperties, Partitioning, PhysicalSortExpr,
+};
 use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
@@ -47,12 +52,52 @@ fn compute_output_schema(label_keys: &[String]) -> SchemaRef {
 impl WideUnpackExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        columns: Vec<WideColumnMeta>,
+        mut columns: Vec<WideColumnMeta>,
         label_keys: Vec<String>,
     ) -> Self {
         let output_schema = compute_output_schema(&label_keys);
+
+        // Sort so the per-column emission loop produces label-sorted output.
+        columns.sort_by(|a, b| {
+            for key in &label_keys {
+                let av = a.labels.get(key).map(|s| s.as_str()).unwrap_or("");
+                let bv = b.labels.get(key).map(|s| s.as_str()).unwrap_or("");
+                match av.cmp(bv) {
+                    Ordering::Equal => continue,
+                    ord => return ord,
+                }
+            }
+            a.metric_name.cmp(&b.metric_name)
+        });
+
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let mut ordering: Vec<PhysicalSortExpr> = Vec::with_capacity(label_keys.len() + 1);
+        for key in &label_keys {
+            if let Ok(col) = Column::new_with_schema(key, output_schema.as_ref()) {
+                ordering.push(PhysicalSortExpr::new(Arc::new(col), asc_nulls_last));
+            }
+        }
+        if let Ok(ts_col) = Column::new_with_schema("timestamp", output_schema.as_ref()) {
+            ordering.push(PhysicalSortExpr::new(Arc::new(ts_col), asc_nulls_last));
+        }
+
+        let mut eq_properties = if ordering.is_empty() {
+            EquivalenceProperties::new(Arc::clone(&output_schema))
+        } else {
+            EquivalenceProperties::new_with_orderings(Arc::clone(&output_schema), [ordering])
+        };
+        // A single WideUnpack handles one metric, so __name__ is constant.
+        if let Ok(name_col) = Column::new_with_schema("__name__", output_schema.as_ref()) {
+            let _ = eq_properties.add_constants([ConstExpr::from(
+                Arc::new(name_col) as Arc<dyn datafusion::physical_expr::PhysicalExpr>
+            )]);
+        }
+
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&output_schema)),
+            eq_properties,
             Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,

@@ -4,11 +4,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{Float64Builder, ListBuilder, StringBuilder, UInt64Builder};
+use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::{
+    EquivalenceProperties, OrderingRequirements, Partitioning, PhysicalSortExpr,
+};
 use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
@@ -82,8 +86,22 @@ impl RangeVectorExec {
         at_timestamp_ns: Option<u64>,
     ) -> Self {
         let output_schema = compute_output_schema(&child.schema(), &label_columns);
+
+        // Outer loop is ascending eval_ts, inner loop is HashMap series order.
+        let asc_nulls_last = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let eq_properties = match Column::new_with_schema("timestamp", output_schema.as_ref()) {
+            Ok(ts_col) => {
+                let ordering = vec![PhysicalSortExpr::new(Arc::new(ts_col), asc_nulls_last)];
+                EquivalenceProperties::new_with_orderings(Arc::clone(&output_schema), [ordering])
+            }
+            Err(_) => EquivalenceProperties::new(Arc::clone(&output_schema)),
+        };
+
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&output_schema)),
+            eq_properties,
             Partitioning::UnknownPartitioning(1),
             datafusion::physical_plan::execution_plan::EmissionType::Final,
             datafusion::physical_plan::execution_plan::Boundedness::Bounded,
