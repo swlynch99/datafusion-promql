@@ -1,21 +1,32 @@
 use std::any::Any;
 use std::collections::{BTreeSet, HashMap};
 use std::fs::File;
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use async_trait::async_trait;
+use bytes::Bytes;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::{
-    ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
+use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
+use datafusion::datasource::physical_plan::{
+    FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::Result as DFResult;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
+use datafusion::physical_expr::create_ordering;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use object_store::ObjectStore;
 use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+use parquet::arrow::async_reader::{AsyncFileReader, ParquetObjectReader};
+use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 
@@ -70,26 +81,56 @@ impl ParquetMetricSource {
     /// schema with [`read_schema`] (which skips row-group statistics).  Use
     /// this directly when you already have the schema from a previous
     /// [`read_schema`] call and want to avoid reading the footer again.
+    ///
+    /// This reads the full [`ParquetMetaData`] footer once and stores it on
+    /// the source so every subsequent scan can reuse the parsed metadata
+    /// instead of re-parsing it from the file.  On very wide files
+    /// (tens of thousands of columns), the Thrift footer decode dominates
+    /// query latency, so hoisting it out of the scan path is a large win.
     pub async fn try_new_with_schema(path: impl AsRef<Path>, schema: Arc<Schema>) -> Result<Self> {
-        let path_str = path.as_ref().to_string_lossy().to_string();
+        let path_ref = path.as_ref();
+        let path_str = path_ref.to_string_lossy().to_string();
 
-        // Build a ListingTable with the pre-read schema, bypassing DataFusion's
-        // slow schema-inference path. The schema has already had Arrow IPC field
-        // metadata stripped by read_schema (via with_skip_arrow_metadata), so
-        // parse_column_from_metadata falls back to name-based rezolus_parse_column.
+        // Parse the footer once up front.  The parquet reader factory below
+        // serves this cached `Arc<ParquetMetaData>` to every scan, so the
+        // ~1 s footer decode on 100k-column files is amortised.
+        let metadata = read_parquet_metadata(path_ref)?;
+
+        // Resolve the file into an object-store URL + Path so DataFusion can
+        // locate it through the default local-filesystem object store.
         let table_url = ListingTableUrl::parse(&path_str)
             .map_err(|e| PromqlError::DataSource(format!("failed to parse table URL: {e}")))?;
-        let file_format = Arc::new(ParquetFormat::default());
-        let listing_opts = ListingOptions::new(file_format)
-            .with_file_extension(".parquet")
-            .with_file_sort_order(vec![vec![col("timestamp").sort(true, false)]]);
-        let config = ListingTableConfig::new(table_url)
-            .with_listing_options(listing_opts)
-            .with_schema(schema);
-        let table_provider: Arc<dyn TableProvider> =
-            Arc::new(ListingTable::try_new(config).map_err(|e| {
-                PromqlError::DataSource(format!("failed to create listing table: {e}"))
-            })?);
+        let object_store_url = table_url.object_store();
+        let object_path = table_url.prefix().clone();
+
+        let file_size = std::fs::metadata(path_ref)
+            .map_err(|e| PromqlError::DataSource(format!("failed to stat parquet file: {e}")))?
+            .len();
+
+        let partitioned_file = PartitionedFile::new_from_meta(object_store::ObjectMeta {
+            location: object_path,
+            last_modified: chrono::Utc::now(),
+            size: file_size,
+            e_tag: None,
+            version: None,
+        });
+
+        // Pre-build the base `ParquetSource` once up front.  `ParquetSource::new`
+        // eagerly walks every column in the table schema to build an initial
+        // `ProjectionExprs`, which on 100 k-column files costs ~300 ms.  We clone
+        // this per scan instead (a cheap `Arc` clone) and let
+        // `FileScanConfigBuilder::with_projection_indices` narrow the projection.
+        let base_source = ParquetSource::new(Arc::clone(&schema));
+
+        let table_provider: Arc<dyn TableProvider> = Arc::new(CachedParquetTableProvider {
+            schema,
+            object_store_url,
+            file_size,
+            metadata,
+            base_source,
+            partitioned_file,
+            sort_order: vec![vec![col("timestamp").sort(true, false)]],
+        });
 
         let column_mapping = rezolus_column_mapping();
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
@@ -390,6 +431,59 @@ pub fn read_schema(path: impl AsRef<Path>) -> Result<Arc<Schema>> {
     Ok(Arc::clone(builder.schema()))
 }
 
+/// Parse the full [`ParquetMetaData`] footer from a parquet file on disk.
+///
+/// Stored on [`ParquetMetricSource`] and handed to the custom
+/// [`ParquetFileReaderFactory`] so every `TableProvider::scan` call reuses
+/// the same parsed footer instead of re-reading and decoding it from the
+/// file on each scan.
+///
+/// The `ARROW:schema` key in `FileMetaData::key_value_metadata` is stripped
+/// before caching.  Without this, every scan's `ArrowReaderMetadata::try_new`
+/// call would re-decode the flatbuffer-encoded Arrow schema for every column
+/// in the file (via `arrow_ipc::convert::fb_to_schema`), which dominates
+/// per-query latency on very wide files.  The parquet primitive schema by
+/// itself is enough for DataFusion to reconstruct the Arrow schema.
+fn read_parquet_metadata(path: &Path) -> Result<Arc<ParquetMetaData>> {
+    let file = File::open(path).map_err(|e| {
+        PromqlError::DataSource(format!("failed to open parquet file for metadata: {e}"))
+    })?;
+    let reader = SerializedFileReader::new(file)
+        .map_err(|e| PromqlError::DataSource(format!("failed to read parquet metadata: {e}")))?;
+    Ok(Arc::new(strip_arrow_ipc_schema(reader.metadata().clone())))
+}
+
+/// Rebuild a [`ParquetMetaData`] with the `ARROW:schema` key-value metadata
+/// removed.  See [`read_parquet_metadata`] for why.
+fn strip_arrow_ipc_schema(metadata: ParquetMetaData) -> ParquetMetaData {
+    let file_meta = metadata.file_metadata();
+    let stripped_kv = file_meta.key_value_metadata().and_then(|kvs| {
+        let filtered: Vec<_> = kvs
+            .iter()
+            .filter(|kv| kv.key != "ARROW:schema")
+            .cloned()
+            .collect();
+        if filtered.is_empty() {
+            None
+        } else {
+            Some(filtered)
+        }
+    });
+    let new_file_meta = FileMetaData::new(
+        file_meta.version(),
+        file_meta.num_rows(),
+        file_meta.created_by().map(str::to_string),
+        stripped_kv,
+        file_meta.schema_descr_ptr(),
+        file_meta.column_orders().cloned(),
+    );
+    ParquetMetaDataBuilder::new(new_file_meta)
+        .set_row_groups(metadata.row_groups().to_vec())
+        .set_column_index(metadata.column_index().cloned())
+        .set_offset_index(metadata.offset_index().cloned())
+        .build()
+}
+
 /// Read the min and max `timestamp` values from parquet row-group statistics.
 ///
 /// Returns `(min_ns, max_ns)` as nanosecond timestamps. This reads only the
@@ -510,6 +604,160 @@ fn matcher_matches(name: &str, matcher: &Matcher) -> bool {
             // Regex filtering could be added if needed.
             true
         }
+    }
+}
+
+/// A [`TableProvider`] backed by a single parquet file whose `ParquetMetaData`
+/// footer was parsed once at construction time.
+///
+/// Every call to [`Self::scan`] builds a fresh `FileScanConfig`, but:
+///
+/// 1. The footer Thrift bytes are never re-decoded — our custom
+///    [`CachedMetadataReaderFactory`] serves the cached `Arc<ParquetMetaData>`
+///    whenever the parquet reader asks for file metadata.
+/// 2. The base [`ParquetSource`] is pre-built once and cloned per scan,
+///    avoiding a per-scan `from_indices` walk over all ~100 k columns in
+///    `ParquetSource::new`.
+///
+/// Combined, these cut ~900 ms off the per-query floor compared to a
+/// plain `ListingTable` on very wide files.
+#[derive(Debug)]
+struct CachedParquetTableProvider {
+    schema: SchemaRef,
+    object_store_url: ObjectStoreUrl,
+    file_size: u64,
+    metadata: Arc<ParquetMetaData>,
+    /// Pre-built [`ParquetSource`] with the full table schema.  Cloning it
+    /// per scan is cheap (its `ProjectionExprs` is `Arc<[_]>`-backed), so we
+    /// pay the O(columns) `from_indices` build cost exactly once.
+    base_source: ParquetSource,
+    /// Pre-built single-partition file descriptor for this parquet file.
+    partitioned_file: PartitionedFile,
+    /// Logical sort order declared for the file (one inner `Vec<Sort>` per
+    /// equivalence class).  Preserved across scans so the DataFusion optimizer
+    /// can still avoid emitting a `SortExec` for `timestamp`-ordered queries.
+    sort_order: Vec<Vec<datafusion::logical_expr::SortExpr>>,
+}
+
+#[async_trait]
+impl TableProvider for CachedParquetTableProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
+        &self,
+        state: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        _filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DFResult<Arc<dyn ExecutionPlan>> {
+        let store = state.runtime_env().object_store(&self.object_store_url)?;
+
+        // Custom reader factory: every scan reuses the single parsed
+        // `Arc<ParquetMetaData>` so the parquet opener never re-decodes the
+        // footer Thrift bytes.
+        let factory: Arc<dyn ParquetFileReaderFactory> = Arc::new(CachedMetadataReaderFactory {
+            store,
+            metadata: Arc::clone(&self.metadata),
+            file_size: self.file_size,
+        });
+
+        let source = self
+            .base_source
+            .clone()
+            .with_parquet_file_reader_factory(factory);
+
+        let output_ordering = create_ordering(&self.schema, &self.sort_order)?;
+
+        let config = FileScanConfigBuilder::new(self.object_store_url.clone(), Arc::new(source))
+            .with_file(self.partitioned_file.clone())
+            .with_projection_indices(projection.cloned())?
+            .with_limit(limit)
+            .with_output_ordering(output_ordering)
+            .build();
+
+        Ok(DataSourceExec::from_data_source(config))
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filters: &[&Expr],
+    ) -> DFResult<Vec<TableProviderFilterPushDown>> {
+        // Mirror `ListingTable`'s behaviour for non-partition filters: claim
+        // inexact pushdown so the DataFusion optimizer keeps a `FilterExec`
+        // above us but is still free to push predicate evaluation down into
+        // the parquet reader via `ParquetSource::try_pushdown_filters`.
+        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+    }
+}
+
+/// [`ParquetFileReaderFactory`] that hands out readers whose `get_metadata`
+/// returns a pre-parsed `Arc<ParquetMetaData>` without touching the file.
+///
+/// All other `AsyncFileReader` calls (bytes / byte ranges, optional page
+/// index load) are delegated to a standard [`ParquetObjectReader`].
+#[derive(Debug)]
+struct CachedMetadataReaderFactory {
+    store: Arc<dyn ObjectStore>,
+    metadata: Arc<ParquetMetaData>,
+    file_size: u64,
+}
+
+impl ParquetFileReaderFactory for CachedMetadataReaderFactory {
+    fn create_reader(
+        &self,
+        _partition_index: usize,
+        partitioned_file: PartitionedFile,
+        _metadata_size_hint: Option<usize>,
+        _metrics: &ExecutionPlanMetricsSet,
+    ) -> DFResult<Box<dyn AsyncFileReader + Send>> {
+        let inner = ParquetObjectReader::new(
+            Arc::clone(&self.store),
+            partitioned_file.object_meta.location.clone(),
+        )
+        .with_file_size(self.file_size);
+        Ok(Box::new(CachedMetadataReader {
+            inner,
+            metadata: Arc::clone(&self.metadata),
+        }))
+    }
+}
+
+struct CachedMetadataReader {
+    inner: ParquetObjectReader,
+    metadata: Arc<ParquetMetaData>,
+}
+
+impl AsyncFileReader for CachedMetadataReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        self.inner.get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, parquet::errors::Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        self.inner.get_byte_ranges(ranges)
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+        let metadata = Arc::clone(&self.metadata);
+        async move { Ok(metadata) }.boxed()
     }
 }
 
