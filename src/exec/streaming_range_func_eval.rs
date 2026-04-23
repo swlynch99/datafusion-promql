@@ -10,6 +10,9 @@ use datafusion::common::Result;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, OrderingRequirements, Partitioning};
 use datafusion::physical_plan::Distribution;
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
+};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
@@ -40,6 +43,7 @@ pub(crate) struct StreamingRangeFuncExec {
     label_columns: Vec<String>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 fn compute_output_schema(child_schema: &SchemaRef, label_columns: &[String]) -> SchemaRef {
@@ -87,6 +91,7 @@ impl StreamingRangeFuncExec {
             label_columns,
             output_schema,
             properties,
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
@@ -164,6 +169,7 @@ impl ExecutionPlan for StreamingRangeFuncExec {
         let at_timestamp_ns = self.at_timestamp_ns;
         let label_columns = self.label_columns.clone();
         let schema_for_stream = Arc::clone(&output_schema);
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         // Collect all input first, then process synchronously in sorted order.
         // The processing is a single pass that maintains a per-series sliding
@@ -180,7 +186,10 @@ impl ExecutionPlan for StreamingRangeFuncExec {
                 batches.push(batch_result?);
             }
 
-            compute_streaming_windows(
+            // Time only the synchronous processing that follows.
+            let _timer = baseline_metrics.elapsed_compute().timer();
+
+            let batch = compute_streaming_windows(
                 batches,
                 &eval_timestamps,
                 range_ns,
@@ -190,13 +199,18 @@ impl ExecutionPlan for StreamingRangeFuncExec {
                 scalar_arg,
                 &label_columns,
                 &output_schema,
-            )
+            )?;
+            Ok(batch.record_output(&baseline_metrics))
         });
 
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             schema_for_stream,
             stream,
         )))
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
     }
 }
 
