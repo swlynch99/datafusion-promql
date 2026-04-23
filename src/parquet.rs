@@ -9,6 +9,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::DFSchema;
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
@@ -16,8 +17,10 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::error::Result as DFResult;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::{TableProviderFilterPushDown, TableType};
-use datafusion::physical_expr::create_ordering;
+use datafusion::logical_expr::expr_rewriter::unnormalize_col;
+use datafusion::logical_expr::utils::conjunction;
+use datafusion::logical_expr::{BinaryExpr, Operator, TableProviderFilterPushDown, TableType};
+use datafusion::physical_expr::{create_ordering, create_physical_expr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
@@ -122,6 +125,7 @@ impl ParquetMetricSource {
         // `FileScanConfigBuilder::with_projection_indices` narrow the projection.
         let base_source = ParquetSource::new(Arc::clone(&schema));
 
+        let column_mapping = rezolus_column_mapping();
         let table_provider: Arc<dyn TableProvider> = Arc::new(CachedParquetTableProvider {
             schema,
             object_store_url,
@@ -129,10 +133,12 @@ impl ParquetMetricSource {
             metadata,
             base_source,
             partitioned_file,
-            sort_order: vec![vec![col("timestamp").sort(true, false)]],
+            sort_order: vec![vec![
+                col(&column_mapping.timestamp_column).sort(true, false),
+            ]],
+            timestamp_column: column_mapping.timestamp_column.clone(),
         });
 
-        let column_mapping = rezolus_column_mapping();
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
         let (metric_column_indices, timestamp_col_idx) =
             build_metric_column_indices(&table_provider, &column_mapping);
@@ -637,6 +643,12 @@ struct CachedParquetTableProvider {
     /// equivalence class).  Preserved across scans so the DataFusion optimizer
     /// can still avoid emitting a `SortExec` for `timestamp`-ordered queries.
     sort_order: Vec<Vec<datafusion::logical_expr::SortExpr>>,
+    /// Name of the timestamp column.  Used by
+    /// [`Self::supports_filters_pushdown`] to recognise pure timestamp-range
+    /// predicates so they can be claimed as `Exact` pushdown (the parquet
+    /// reader evaluates them exactly via row-group pruning / page index / row
+    /// filter), avoiding a redundant above-scan `FilterExec`.
+    timestamp_column: String,
 }
 
 #[async_trait]
@@ -657,7 +669,7 @@ impl TableProvider for CachedParquetTableProvider {
         &self,
         state: &dyn Session,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
+        filters: &[Expr],
         limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         let store = state.runtime_env().object_store(&self.object_store_url)?;
@@ -671,10 +683,36 @@ impl TableProvider for CachedParquetTableProvider {
             file_size: self.file_size,
         });
 
-        let source = self
+        let mut source = self
             .base_source
             .clone()
             .with_parquet_file_reader_factory(factory);
+
+        // Install pushed-down filters as the parquet source's predicate.  With
+        // `supports_filters_pushdown` claiming `Exact` for timestamp-range
+        // predicates, DataFusion removes the above-scan `FilterExec` and hands
+        // the filters here via `filters`; it's then our job to install them so
+        // the parquet reader can perform row-group pruning + page index + row
+        // filtering.  For `Inexact` filters we still install them for better
+        // pruning — the above-scan `FilterExec` remains as the authoritative
+        // evaluator.
+        //
+        // The optimizer sometimes hands us the same predicate in both qualified
+        // (`cpu_cores.timestamp >= ...`) and unqualified (`timestamp >= ...`)
+        // forms; strip qualifiers and dedup so the installed predicate has one
+        // clause per distinct filter.
+        let mut seen = std::collections::HashSet::new();
+        let unique_filters: Vec<Expr> = filters
+            .iter()
+            .map(|f| unnormalize_col((*f).clone()))
+            .filter(|f| seen.insert(f.clone()))
+            .collect();
+        if let Some(predicate_expr) = conjunction(unique_filters) {
+            let df_schema = DFSchema::try_from(Arc::clone(&self.schema))?;
+            let physical_expr =
+                create_physical_expr(&predicate_expr, &df_schema, state.execution_props())?;
+            source = source.with_predicate(physical_expr);
+        }
 
         let output_ordering = create_ordering(&self.schema, &self.sort_order)?;
 
@@ -692,12 +730,45 @@ impl TableProvider for CachedParquetTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DFResult<Vec<TableProviderFilterPushDown>> {
-        // Mirror `ListingTable`'s behaviour for non-partition filters: claim
-        // inexact pushdown so the DataFusion optimizer keeps a `FilterExec`
-        // above us but is still free to push predicate evaluation down into
-        // the parquet reader via `ParquetSource::try_pushdown_filters`.
-        Ok(vec![TableProviderFilterPushDown::Inexact; filters.len()])
+        // Claim `Exact` pushdown for pure timestamp-range / equality predicates
+        // against the monotonic, statistics-backed timestamp column.  The parquet
+        // reader evaluates those predicates exactly (row-group pruning + page
+        // index + row filter), so the optimizer can drop the redundant
+        // above-scan `FilterExec`.  Everything else (label matchers, etc.)
+        // stays `Inexact` because the parquet reader has no way to reason about
+        // those semantics, so DataFusion must retain its `FilterExec`.
+        Ok(filters
+            .iter()
+            .map(|f| {
+                if is_timestamp_range_filter(f, &self.timestamp_column) {
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    TableProviderFilterPushDown::Inexact
+                }
+            })
+            .collect())
     }
+}
+
+/// Classify a filter expression as a pure `<timestamp column> CMP <literal>`
+/// comparison (or its mirror image), where `CMP` is one of `<`, `<=`, `>`,
+/// `>=`, `=`.  The parquet reader evaluates such filters exactly through its
+/// pruning predicate + row filter, so they can be claimed as `Exact`
+/// pushdown.  Anything more complex (arithmetic, casts, boolean combinations)
+/// falls through to `Inexact`.
+fn is_timestamp_range_filter(expr: &Expr, ts_col: &str) -> bool {
+    let Expr::BinaryExpr(BinaryExpr { left, op, right }) = expr else {
+        return false;
+    };
+    if !matches!(
+        op,
+        Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq | Operator::Eq,
+    ) {
+        return false;
+    }
+    let is_ts_col = |e: &Expr| matches!(e, Expr::Column(c) if c.name == ts_col);
+    let is_literal = |e: &Expr| matches!(e, Expr::Literal(_, _));
+    (is_ts_col(left) && is_literal(right)) || (is_ts_col(right) && is_literal(left))
 }
 
 /// [`ParquetFileReaderFactory`] that hands out readers whose `get_metadata`
