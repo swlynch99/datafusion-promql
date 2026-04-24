@@ -68,11 +68,27 @@ impl OptimizerRule for RangeVectorToAggregation {
             return Ok(Transformed::no(plan));
         }
 
-        // Functions that only examine the last few samples in the window
-        // (irate, idelta) are better served by the streaming sliding-window
-        // node, which processes sorted input in a single pass without
-        // materialising intermediate List arrays and without a cross join.
-        if matches!(func, RangeFunction::Irate | RangeFunction::Idelta) {
+        // Every remaining window-reducer range function is routed through the
+        // streaming sliding-window node, which processes sorted input in a
+        // single pass without materialising intermediate List arrays and
+        // without a cross join with evaluation timestamps.
+        if matches!(
+            func,
+            RangeFunction::Rate
+                | RangeFunction::Irate
+                | RangeFunction::Increase
+                | RangeFunction::Delta
+                | RangeFunction::Idelta
+                | RangeFunction::AvgOverTime
+                | RangeFunction::CountOverTime
+                | RangeFunction::SumOverTime
+                | RangeFunction::MinOverTime
+                | RangeFunction::MaxOverTime
+                | RangeFunction::StddevOverTime
+                | RangeFunction::StdvarOverTime
+                | RangeFunction::LastOverTime
+                | RangeFunction::PresentOverTime
+        ) {
             let streaming = StreamingRangeFunctionEval::new(
                 eval.input.clone(),
                 func,
