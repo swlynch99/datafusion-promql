@@ -41,6 +41,14 @@ pub(crate) struct StreamingRangeFuncExec {
     offset_ns: i64,
     at_timestamp_ns: Option<u64>,
     label_columns: Vec<String>,
+    /// Maximum number of samples to retain in each series' sliding-window
+    /// deque. `None` means no cap (the deque is bounded only by the time
+    /// window, `range_ns`).
+    ///
+    /// Set by the `ReduceStreamingRangeWindow` physical optimizer rule
+    /// based on what the range function actually consumes; left as `None`
+    /// when constructed directly by the extension planner.
+    max_window_samples: Option<usize>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
@@ -89,10 +97,52 @@ impl StreamingRangeFuncExec {
             offset_ns,
             at_timestamp_ns,
             label_columns,
+            max_window_samples: None,
             output_schema,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+
+    /// Return a copy with the per-series sliding-window sample cap set.
+    ///
+    /// Used by the physical optimizer to bound memory for functions that
+    /// only consult a fixed number of trailing samples.
+    pub fn with_max_window_samples(mut self, max: Option<usize>) -> Self {
+        self.max_window_samples = max;
+        self
+    }
+
+    pub fn func(&self) -> RangeFunction {
+        self.func
+    }
+
+    pub fn max_window_samples(&self) -> Option<usize> {
+        self.max_window_samples
+    }
+
+    /// Build a new exec with the same parameters as `self` but with a
+    /// different per-series sample cap. Used by the physical optimizer to
+    /// rewrite the node without touching its children.
+    pub fn clone_with_max_window_samples(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        max: Option<usize>,
+    ) -> Self {
+        Self::new(
+            children
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| Arc::clone(&self.child)),
+            self.func,
+            self.scalar_arg,
+            self.range_ns,
+            self.eval_timestamps.clone(),
+            self.offset_ns,
+            self.at_timestamp_ns,
+            self.label_columns.clone(),
+        )
+        .with_max_window_samples(max)
     }
 }
 
@@ -102,7 +152,11 @@ impl DisplayAs for StreamingRangeFuncExec {
             f,
             "StreamingRangeFuncExec: func={}, range={}ns",
             self.func, self.range_ns
-        )
+        )?;
+        if let Some(cap) = self.max_window_samples {
+            write!(f, ", max_samples={cap}")?;
+        }
+        Ok(())
     }
 }
 
@@ -142,16 +196,19 @@ impl ExecutionPlan for StreamingRangeFuncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
-            self.func,
-            self.scalar_arg,
-            self.range_ns,
-            self.eval_timestamps.clone(),
-            self.offset_ns,
-            self.at_timestamp_ns,
-            self.label_columns.clone(),
-        )))
+        Ok(Arc::new(
+            Self::new(
+                Arc::clone(&children[0]),
+                self.func,
+                self.scalar_arg,
+                self.range_ns,
+                self.eval_timestamps.clone(),
+                self.offset_ns,
+                self.at_timestamp_ns,
+                self.label_columns.clone(),
+            )
+            .with_max_window_samples(self.max_window_samples),
+        ))
     }
 
     fn execute(
@@ -168,6 +225,13 @@ impl ExecutionPlan for StreamingRangeFuncExec {
         let offset_ns = self.offset_ns;
         let at_timestamp_ns = self.at_timestamp_ns;
         let label_columns = self.label_columns.clone();
+        // The optimizer-supplied cap takes precedence; otherwise fall back
+        // to the function's intrinsic minimum so memory is still bounded
+        // for irate/idelta/last_over_time/present_over_time when the rule
+        // hasn't been registered.
+        let max_window_samples = self
+            .max_window_samples
+            .or_else(|| func.max_samples_needed());
         let schema_for_stream = Arc::clone(&output_schema);
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -199,6 +263,7 @@ impl ExecutionPlan for StreamingRangeFuncExec {
                 scalar_arg,
                 &label_columns,
                 &output_schema,
+                max_window_samples,
             )?;
             Ok(batch.record_output(&baseline_metrics))
         });
@@ -382,6 +447,7 @@ fn compute_streaming_windows(
     scalar_arg: Option<f64>,
     label_columns: &[String],
     output_schema: &SchemaRef,
+    max_window_samples: Option<usize>,
 ) -> Result<RecordBatch> {
     let mut out_ts = UInt64Builder::new();
     let mut out_val = Float64Builder::new();
@@ -392,10 +458,6 @@ fn compute_streaming_windows(
     let mut current_series: Option<Vec<String>> = None;
     let mut window: VecDeque<(u64, f64)> = VecDeque::new();
     let mut eval_idx: usize = 0;
-    // For irate/idelta only the two most recent samples are read by
-    // `apply_func`, so cap the deque to bound per-series memory. Window-end
-    // eviction by `window_start` still happens at flush time.
-    let cap_to_two = matches!(func, RangeFunction::Irate | RangeFunction::Idelta);
 
     for batch in &batches {
         let ts_arr = batch
@@ -494,8 +556,8 @@ fn compute_streaming_windows(
 
             // Add the current sample to the sliding window.
             window.push_back((ts, val));
-            if cap_to_two {
-                while window.len() > 2 {
+            if let Some(max) = max_window_samples {
+                while window.len() > max {
                     window.pop_front();
                 }
             }
