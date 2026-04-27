@@ -24,7 +24,8 @@ use crate::node::WideColumnMeta;
 ///
 /// Reads `RecordBatch`es from a single child (a wide-format table scan with
 /// columns `[timestamp, col_0, col_1, ..., col_N]`) and produces long-format
-/// output `[timestamp, value, __name__, label_key_0, ...]`.
+/// output `[timestamp, value, [__name__,] label_key_0, ...]`. The `__name__`
+/// column is only emitted when `include_name` is `true`.
 ///
 /// For each input row, emits N output rows (one per value column). Columns
 /// are processed in order, so the output is grouped by series with timestamps
@@ -34,17 +35,20 @@ pub(crate) struct WideUnpackExec {
     child: Arc<dyn ExecutionPlan>,
     columns: Vec<WideColumnMeta>,
     label_keys: Vec<String>,
+    include_name: bool,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
 }
 
-fn compute_output_schema(label_keys: &[String]) -> SchemaRef {
+fn compute_output_schema(label_keys: &[String], include_name: bool) -> SchemaRef {
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, true),
-        Field::new("__name__", DataType::Utf8, false),
     ];
+    if include_name {
+        fields.push(Field::new("__name__", DataType::Utf8, false));
+    }
     for key in label_keys {
         fields.push(Field::new(key, DataType::Utf8, true));
     }
@@ -56,8 +60,9 @@ impl WideUnpackExec {
         child: Arc<dyn ExecutionPlan>,
         mut columns: Vec<WideColumnMeta>,
         label_keys: Vec<String>,
+        include_name: bool,
     ) -> Self {
-        let output_schema = compute_output_schema(&label_keys);
+        let output_schema = compute_output_schema(&label_keys, include_name);
 
         // Sort so the per-column emission loop produces label-sorted output.
         columns.sort_by(|a, b| {
@@ -92,7 +97,9 @@ impl WideUnpackExec {
             EquivalenceProperties::new_with_orderings(Arc::clone(&output_schema), [ordering])
         };
         // A single WideUnpack handles one metric, so __name__ is constant.
-        if let Ok(name_col) = Column::new_with_schema("__name__", output_schema.as_ref()) {
+        if include_name
+            && let Ok(name_col) = Column::new_with_schema("__name__", output_schema.as_ref())
+        {
             let _ = eq_properties.add_constants([ConstExpr::from(
                 Arc::new(name_col) as Arc<dyn datafusion::physical_expr::PhysicalExpr>
             )]);
@@ -108,6 +115,7 @@ impl WideUnpackExec {
             child,
             columns,
             label_keys,
+            include_name,
             output_schema,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -119,9 +127,10 @@ impl DisplayAs for WideUnpackExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WideUnpackExec: {} columns, labels=[{}]",
+            "WideUnpackExec: {} columns, labels=[{}]{}",
             self.columns.len(),
-            self.label_keys.join(", ")
+            self.label_keys.join(", "),
+            if self.include_name { "" } else { ", no_name" }
         )
     }
 }
@@ -167,6 +176,7 @@ impl ExecutionPlan for WideUnpackExec {
             Arc::clone(&children[0]),
             self.columns.clone(),
             self.label_keys.clone(),
+            self.include_name,
         )))
     }
 
@@ -179,6 +189,7 @@ impl ExecutionPlan for WideUnpackExec {
         let output_schema = Arc::clone(&self.output_schema);
         let columns_meta = self.columns.clone();
         let label_keys = self.label_keys.clone();
+        let include_name = self.include_name;
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         let stream = futures::stream::once(async move {
@@ -200,7 +211,8 @@ impl ExecutionPlan for WideUnpackExec {
 
             let mut out_ts = UInt64Builder::with_capacity(total_output_rows);
             let mut out_val = Float64Builder::with_capacity(total_output_rows);
-            let mut out_name = StringBuilder::with_capacity(total_output_rows, 0);
+            let mut out_name =
+                include_name.then(|| StringBuilder::with_capacity(total_output_rows, 0));
             let mut out_labels: Vec<StringBuilder> = label_keys
                 .iter()
                 .map(|_| StringBuilder::with_capacity(total_output_rows, 0))
@@ -244,7 +256,9 @@ impl ExecutionPlan for WideUnpackExec {
                         } else {
                             out_val.append_value(val_arr.value(row));
                         }
-                        out_name.append_value(&col_meta.metric_name);
+                        if let Some(builder) = out_name.as_mut() {
+                            builder.append_value(&col_meta.metric_name);
+                        }
                         for (i, label_val) in label_values.iter().enumerate() {
                             out_labels[i].append_value(label_val);
                         }
@@ -253,11 +267,11 @@ impl ExecutionPlan for WideUnpackExec {
             }
 
             // Build output RecordBatch.
-            let mut arrays: Vec<arrow::array::ArrayRef> = vec![
-                Arc::new(out_ts.finish()),
-                Arc::new(out_val.finish()),
-                Arc::new(out_name.finish()),
-            ];
+            let mut arrays: Vec<arrow::array::ArrayRef> =
+                vec![Arc::new(out_ts.finish()), Arc::new(out_val.finish())];
+            if let Some(mut builder) = out_name {
+                arrays.push(Arc::new(builder.finish()));
+            }
             for builder in &mut out_labels {
                 arrays.push(Arc::new(builder.finish()));
             }
