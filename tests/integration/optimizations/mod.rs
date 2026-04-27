@@ -5,3 +5,4 @@ mod push_instant_eval_through_union;
 mod push_step_eval_through_union;
 mod push_streaming_range_func_eval_through_union;
 mod push_streaming_range_func_eval_through_wide_unpack;
+mod push_sum_through_wide_unpack;
