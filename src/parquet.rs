@@ -9,7 +9,7 @@ use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::DFSchema;
+use datafusion::common::{Constraint, Constraints, DFSchema};
 use datafusion::datasource::listing::{ListingTableUrl, PartitionedFile};
 use datafusion::datasource::physical_plan::{
     FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
@@ -126,6 +126,11 @@ impl ParquetMetricSource {
         let base_source = ParquetSource::new(Arc::clone(&schema));
 
         let column_mapping = rezolus_column_mapping();
+        let timestamp_col_idx = schema
+            .index_of(&column_mapping.timestamp_column)
+            .map_err(|e| PromqlError::DataSource(format!("timestamp column not found: {e}")))?;
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::Unique(vec![timestamp_col_idx])]);
         let table_provider: Arc<dyn TableProvider> = Arc::new(CachedParquetTableProvider {
             schema,
             object_store_url,
@@ -137,6 +142,7 @@ impl ParquetMetricSource {
                 col(&column_mapping.timestamp_column).sort(true, false),
             ]],
             timestamp_column: column_mapping.timestamp_column.clone(),
+            constraints,
         });
 
         let metrics = build_metric_metadata(&table_provider, &column_mapping);
@@ -203,10 +209,16 @@ impl MetricSource for ParquetMetricSource {
         }
 
         let narrow_schema = Arc::new(Schema::new(narrow_fields));
+        // Timestamp is always at index 0 in `narrow_schema` (see above), and
+        // every wide-format parquet file has at most one row per timestamp,
+        // so propagate that uniqueness constraint to the optimizer.
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
         let narrow_provider: Arc<dyn TableProvider> = Arc::new(NarrowTableProvider {
             inner: Arc::clone(&self.table_provider),
             narrow_schema,
             index_map,
+            constraints,
         });
 
         Ok((
@@ -558,6 +570,10 @@ struct NarrowTableProvider {
     /// `index_map[i]` is the column index in the inner provider's full schema
     /// that corresponds to column `i` in `narrow_schema`.
     index_map: Vec<usize>,
+    /// Constraints expressed in terms of `narrow_schema` indices.  Built when
+    /// the narrow provider is constructed and surfaced to the DataFusion
+    /// optimizer via [`TableProvider::constraints`].
+    constraints: Constraints,
 }
 
 #[async_trait]
@@ -568,6 +584,10 @@ impl TableProvider for NarrowTableProvider {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.narrow_schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
@@ -649,6 +669,11 @@ struct CachedParquetTableProvider {
     /// reader evaluates them exactly via row-group pruning / page index / row
     /// filter), avoiding a redundant above-scan `FilterExec`.
     timestamp_column: String,
+    /// Uniqueness constraints declared for the wide-format scan.  Rezolus-style
+    /// parquet files have at most one row per timestamp, so the timestamp
+    /// column is unique; this is propagated to the DataFusion optimizer via
+    /// [`TableProvider::constraints`].
+    constraints: Constraints,
 }
 
 #[async_trait]
@@ -659,6 +684,10 @@ impl TableProvider for CachedParquetTableProvider {
 
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
+    }
+
+    fn constraints(&self) -> Option<&Constraints> {
+        Some(&self.constraints)
     }
 
     fn table_type(&self) -> TableType {
