@@ -258,6 +258,23 @@ fn effective_ts(eval_t: u64, at_timestamp_ns: Option<u64>, offset_ns: i64) -> u6
     (lookup as i64 - offset_ns) as u64
 }
 
+/// If every column is `irate`/`idelta`, only the last two samples per column
+/// are ever consulted (see `apply_func`), so the deque can be capped at 2.
+/// Mixing with other range functions disables the cap because those functions
+/// need the full sliding window.
+#[inline]
+fn deque_cap(funcs: &[ColumnRangeFunc]) -> Option<usize> {
+    if !funcs.is_empty()
+        && funcs
+            .iter()
+            .all(|cf| matches!(cf.func, RangeFunction::Irate | RangeFunction::Idelta))
+    {
+        Some(2)
+    } else {
+        None
+    }
+}
+
 /// Apply a range function to a sliding-window deque. Mirrors the hot-path
 /// optimization in `streaming_range_func_eval.rs` for `irate`/`idelta`.
 fn apply_func(
@@ -326,6 +343,32 @@ fn compute_wide_streaming_windows(
     funcs: &[ColumnRangeFunc],
     value_columns: &[String],
     output_schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    let cap = deque_cap(funcs);
+    compute_wide_streaming_windows_with_cap(
+        batches,
+        eval_timestamps,
+        range_ns,
+        offset_ns,
+        at_timestamp_ns,
+        funcs,
+        value_columns,
+        output_schema,
+        cap,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_wide_streaming_windows_with_cap(
+    batches: Vec<RecordBatch>,
+    eval_timestamps: &[u64],
+    range_ns: u64,
+    offset_ns: i64,
+    at_timestamp_ns: Option<u64>,
+    funcs: &[ColumnRangeFunc],
+    value_columns: &[String],
+    output_schema: &SchemaRef,
+    cap: Option<usize>,
 ) -> Result<RecordBatch> {
     let n_cols = value_columns.len();
     debug_assert_eq!(funcs.len(), n_cols);
@@ -415,7 +458,16 @@ fn compute_wide_streaming_windows(
                 if arr.is_null(row) {
                     continue;
                 }
-                windows[c].push_back((ts, arr.value(row)));
+                let w = &mut windows[c];
+                w.push_back((ts, arr.value(row)));
+                // For uniform irate/idelta we only ever look at the two most
+                // recent samples, so cap memory growth here. Window-eviction
+                // by `window_start` still happens at flush time below.
+                if let Some(max) = cap {
+                    while w.len() > max {
+                        w.pop_front();
+                    }
+                }
             }
         }
     }
@@ -435,4 +487,135 @@ fn compute_wide_streaming_windows(
         arrays.push(Arc::new(builder.finish()));
     }
     Ok(RecordBatch::try_new(Arc::clone(output_schema), arrays)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Float64Array, UInt64Array};
+
+    fn build_input_batch(samples: &[(u64, f64)]) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("timestamp", DataType::UInt64, false),
+            Field::new("col_0", DataType::Float64, true),
+        ]));
+        let ts: UInt64Array = samples.iter().map(|(t, _)| *t).collect();
+        let val: Float64Array = samples.iter().map(|(_, v)| *v).collect();
+        RecordBatch::try_new(schema, vec![Arc::new(ts), Arc::new(val)]).unwrap()
+    }
+
+    #[test]
+    fn deque_cap_uniform_irate_idelta() {
+        let s = None;
+        assert_eq!(
+            deque_cap(&[ColumnRangeFunc::new(RangeFunction::Irate, s)]),
+            Some(2)
+        );
+        assert_eq!(
+            deque_cap(&[
+                ColumnRangeFunc::new(RangeFunction::Irate, s),
+                ColumnRangeFunc::new(RangeFunction::Idelta, s),
+            ]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn deque_cap_disabled_when_mixed() {
+        let s = None;
+        // Mixing irate with rate must keep the full window.
+        assert_eq!(
+            deque_cap(&[
+                ColumnRangeFunc::new(RangeFunction::Irate, s),
+                ColumnRangeFunc::new(RangeFunction::Rate, s),
+            ]),
+            None
+        );
+        assert_eq!(
+            deque_cap(&[ColumnRangeFunc::new(RangeFunction::Rate, s)]),
+            None
+        );
+        // Empty funcs (defensive).
+        assert_eq!(deque_cap(&[]), None);
+    }
+
+    #[test]
+    fn cap_matches_uncapped_for_irate_30_samples() {
+        // 30 samples, 10s apart, monotonically increasing counter values.
+        const N: usize = 30;
+        const STEP_NS: u64 = 10_000_000_000;
+        let samples: Vec<(u64, f64)> = (0..N)
+            .map(|i| (1_000_000_000 + i as u64 * STEP_NS, (i as f64) * 1.5))
+            .collect();
+        let batch = build_input_batch(&samples);
+
+        // Eval every 30s across a 5-minute window, like a wide irate query.
+        let range_ns: u64 = 300 * 1_000_000_000;
+        let start_ns: u64 = samples.first().unwrap().0;
+        let end_ns: u64 = samples.last().unwrap().0;
+        let mut eval_timestamps = Vec::new();
+        let mut t = start_ns;
+        while t <= end_ns {
+            eval_timestamps.push(t);
+            t += 30 * 1_000_000_000;
+        }
+
+        let value_columns = vec!["col_0".to_string()];
+        let funcs = vec![ColumnRangeFunc::new(RangeFunction::Irate, None)];
+        let output_schema = compute_output_schema(&value_columns);
+
+        let capped = compute_wide_streaming_windows_with_cap(
+            vec![batch.clone()],
+            &eval_timestamps,
+            range_ns,
+            0,
+            None,
+            &funcs,
+            &value_columns,
+            &output_schema,
+            Some(2),
+        )
+        .unwrap();
+        let uncapped = compute_wide_streaming_windows_with_cap(
+            vec![batch],
+            &eval_timestamps,
+            range_ns,
+            0,
+            None,
+            &funcs,
+            &value_columns,
+            &output_schema,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(capped.num_rows(), uncapped.num_rows());
+        let cap_ts = capped
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        let unc_ts = uncapped
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .unwrap();
+        assert_eq!(cap_ts.values(), unc_ts.values());
+        let cap_v = capped
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let unc_v = uncapped
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        for i in 0..cap_v.len() {
+            assert_eq!(cap_v.is_null(i), unc_v.is_null(i));
+            if !cap_v.is_null(i) {
+                assert!((cap_v.value(i) - unc_v.value(i)).abs() < 1e-12);
+            }
+        }
+    }
 }

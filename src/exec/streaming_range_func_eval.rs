@@ -392,6 +392,10 @@ fn compute_streaming_windows(
     let mut current_series: Option<Vec<String>> = None;
     let mut window: VecDeque<(u64, f64)> = VecDeque::new();
     let mut eval_idx: usize = 0;
+    // For irate/idelta only the two most recent samples are read by
+    // `apply_func`, so cap the deque to bound per-series memory. Window-end
+    // eviction by `window_start` still happens at flush time.
+    let cap_to_two = matches!(func, RangeFunction::Irate | RangeFunction::Idelta);
 
     for batch in &batches {
         let ts_arr = batch
@@ -490,6 +494,11 @@ fn compute_streaming_windows(
 
             // Add the current sample to the sliding window.
             window.push_back((ts, val));
+            if cap_to_two {
+                while window.len() > 2 {
+                    window.pop_front();
+                }
+            }
         }
     }
 
