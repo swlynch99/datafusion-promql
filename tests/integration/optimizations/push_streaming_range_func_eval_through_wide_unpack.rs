@@ -175,7 +175,11 @@ fn test_push_down_matching_labels() {
         .downcast_ref::<WideStreamingRangeFunctionEval>()
         .expect("inner node should be WideStreamingRangeFunctionEval");
     assert_eq!(wide_eval.value_columns.len(), 3);
-    assert_eq!(wide_eval.func, RangeFunction::Rate);
+    assert_eq!(wide_eval.funcs.len(), 3);
+    for cf in wide_eval.funcs.iter() {
+        assert_eq!(cf.func, RangeFunction::Rate);
+        assert_eq!(cf.scalar_arg, None);
+    }
 }
 
 /// When the label columns do not match the WideUnpack's `{__name__} ∪
@@ -262,8 +266,11 @@ fn test_push_down_preserves_parameters() {
         .downcast_ref::<WideStreamingRangeFunctionEval>()
         .unwrap();
 
-    assert_eq!(wide_eval.func, RangeFunction::Irate);
-    assert_eq!(wide_eval.scalar_arg, Some(42.0));
+    assert_eq!(wide_eval.funcs.len(), 3);
+    for cf in wide_eval.funcs.iter() {
+        assert_eq!(cf.func, RangeFunction::Irate);
+        assert_eq!(cf.scalar_arg, Some(42.0));
+    }
     assert_eq!(wide_eval.range_ns, 60_000_000_000);
     assert_eq!(wide_eval.eval_ts_ns, None);
     assert_eq!(wide_eval.start_ns, 1_000_000_000);

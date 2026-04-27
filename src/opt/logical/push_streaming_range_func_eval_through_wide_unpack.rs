@@ -113,7 +113,9 @@ impl OptimizerRule for PushStreamingRangeFuncEvalThroughWideUnpack {
             unpack.columns.iter().map(|m| m.col_name.clone()).collect();
 
         // Build the new plan:  WideUnpack( WideStreamingRangeFunctionEval( <wide input> ) )
-        let wide_eval = WideStreamingRangeFunctionEval::new(
+        // The pushed-down node receives the same range function and scalar
+        // argument applied uniformly to every value column.
+        let wide_eval = WideStreamingRangeFunctionEval::new_uniform(
             unpack.input.clone(),
             eval.func,
             eval.scalar_arg,

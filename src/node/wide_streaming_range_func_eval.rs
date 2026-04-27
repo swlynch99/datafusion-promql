@@ -11,6 +11,20 @@ use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 use crate::error::{PromqlError, Result};
 use crate::func::RangeFunction;
 
+/// Range function (and optional scalar argument) applied to a single value
+/// column of a wide-format input.
+#[derive(Debug, Clone, Copy)]
+pub struct ColumnRangeFunc {
+    pub func: RangeFunction,
+    pub scalar_arg: Option<f64>,
+}
+
+impl ColumnRangeFunc {
+    pub fn new(func: RangeFunction, scalar_arg: Option<f64>) -> Self {
+        Self { func, scalar_arg }
+    }
+}
+
 /// Wide-format counterpart to [`StreamingRangeFunctionEval`].
 ///
 /// Input: wide-format samples `(timestamp: UInt64, col_0: Float64, …,
@@ -24,6 +38,10 @@ use crate::func::RangeFunction;
 /// has no result at a given eval timestamp (e.g. too few samples), its cell
 /// is null.
 ///
+/// Each value column has its own [`ColumnRangeFunc`] in `funcs`, so different
+/// columns can apply different range functions (and scalar arguments) in the
+/// same single-pass evaluation. `funcs` is parallel to `value_columns`.
+///
 /// The transformation over this node, combined with a [`WideUnpack`] above
 /// it, is equivalent to running [`StreamingRangeFunctionEval`] on the
 /// long-format unpacked output — but avoids materialising N × #rows
@@ -35,10 +53,9 @@ use crate::func::RangeFunction;
 pub struct WideStreamingRangeFunctionEval {
     /// Wide-format input plan.
     pub input: LogicalPlan,
-    /// The range function to apply at each evaluation timestamp.
-    pub func: RangeFunction,
-    /// Optional scalar argument (`predict_linear` duration, etc.).
-    pub scalar_arg: Option<f64>,
+    /// Per-column range function (and optional scalar argument). Parallel to
+    /// `value_columns`: `funcs[i]` is applied to `value_columns[i]`.
+    pub funcs: Arc<Vec<ColumnRangeFunc>>,
     /// Sliding window width in nanoseconds.
     pub range_ns: u64,
     /// Single evaluation timestamp for instant queries (ns); `None` for
@@ -62,6 +79,44 @@ impl WideStreamingRangeFunctionEval {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         input: LogicalPlan,
+        funcs: Arc<Vec<ColumnRangeFunc>>,
+        range_ns: u64,
+        eval_ts_ns: Option<u64>,
+        start_ns: u64,
+        end_ns: u64,
+        step_ns: u64,
+        offset_ns: i64,
+        value_columns: Arc<Vec<String>>,
+        at_timestamp_ns: Option<u64>,
+    ) -> Result<Self> {
+        if funcs.len() != value_columns.len() {
+            return Err(PromqlError::Plan(format!(
+                "WideStreamingRangeFunctionEval: funcs length ({}) must match value_columns length ({})",
+                funcs.len(),
+                value_columns.len()
+            )));
+        }
+        let output_schema = compute_output_schema(&input, &value_columns)?;
+        Ok(Self {
+            input,
+            funcs,
+            range_ns,
+            eval_ts_ns,
+            start_ns,
+            end_ns,
+            step_ns,
+            offset_ns,
+            value_columns,
+            at_timestamp_ns,
+            output_schema,
+        })
+    }
+
+    /// Build a node that applies the same range function (and scalar
+    /// argument) to every value column.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_uniform(
+        input: LogicalPlan,
         func: RangeFunction,
         scalar_arg: Option<f64>,
         range_ns: u64,
@@ -73,11 +128,13 @@ impl WideStreamingRangeFunctionEval {
         value_columns: Arc<Vec<String>>,
         at_timestamp_ns: Option<u64>,
     ) -> Result<Self> {
-        let output_schema = compute_output_schema(&input, &value_columns)?;
-        Ok(Self {
+        let funcs = Arc::new(vec![
+            ColumnRangeFunc::new(func, scalar_arg);
+            value_columns.len()
+        ]);
+        Self::new(
             input,
-            func,
-            scalar_arg,
+            funcs,
             range_ns,
             eval_ts_ns,
             start_ns,
@@ -86,8 +143,7 @@ impl WideStreamingRangeFunctionEval {
             offset_ns,
             value_columns,
             at_timestamp_ns,
-            output_schema,
-        })
+        )
     }
 
     /// Generate the sorted list of evaluation timestamps.
@@ -146,10 +202,21 @@ impl UserDefinedLogicalNodeCore for WideStreamingRangeFunctionEval {
     }
 
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut distinct: Vec<RangeFunction> = Vec::new();
+        for cf in self.funcs.iter() {
+            if !distinct.contains(&cf.func) {
+                distinct.push(cf.func);
+            }
+        }
+        let funcs_str = distinct
+            .iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         write!(
             f,
-            "WideStreamingRangeFunctionEval: func={}, range={}ns, columns={}",
-            self.func,
+            "WideStreamingRangeFunctionEval: funcs=[{}], range={}ns, columns={}",
+            funcs_str,
             self.range_ns,
             self.value_columns.len()
         )
@@ -162,8 +229,7 @@ impl UserDefinedLogicalNodeCore for WideStreamingRangeFunctionEval {
     ) -> datafusion::common::Result<Self> {
         Ok(Self {
             input: inputs.into_iter().next().unwrap(),
-            func: self.func,
-            scalar_arg: self.scalar_arg,
+            funcs: Arc::clone(&self.funcs),
             range_ns: self.range_ns,
             eval_ts_ns: self.eval_ts_ns,
             start_ns: self.start_ns,
@@ -188,9 +254,14 @@ impl UserDefinedLogicalNodeCore for WideStreamingRangeFunctionEval {
 
 impl PartialEq for WideStreamingRangeFunctionEval {
     fn eq(&self, other: &Self) -> bool {
-        self.func == other.func
-            && self.range_ns == other.range_ns
+        self.range_ns == other.range_ns
             && self.value_columns == other.value_columns
+            && self.funcs.len() == other.funcs.len()
+            && self
+                .funcs
+                .iter()
+                .zip(other.funcs.iter())
+                .all(|(a, b)| a.func == b.func)
     }
 }
 
@@ -198,7 +269,9 @@ impl Eq for WideStreamingRangeFunctionEval {}
 
 impl Hash for WideStreamingRangeFunctionEval {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.func.hash(state);
+        for cf in self.funcs.iter() {
+            cf.func.hash(state);
+        }
         self.range_ns.hash(state);
         self.value_columns.hash(state);
     }
