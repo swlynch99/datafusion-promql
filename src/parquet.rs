@@ -212,8 +212,7 @@ impl MetricSource for ParquetMetricSource {
         // Timestamp is always at index 0 in `narrow_schema` (see above), and
         // every wide-format parquet file has at most one row per timestamp,
         // so propagate that uniqueness constraint to the optimizer.
-        let constraints =
-            Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
+        let constraints = Constraints::new_unverified(vec![Constraint::Unique(vec![0])]);
         let narrow_provider: Arc<dyn TableProvider> = Arc::new(NarrowTableProvider {
             inner: Arc::clone(&self.table_provider),
             narrow_schema,
