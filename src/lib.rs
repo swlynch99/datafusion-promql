@@ -64,6 +64,9 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(
                 crate::opt::logical::PushStreamingRangeFuncEvalThroughUnion,
             ))
+            .with_optimizer_rule(Arc::new(
+                crate::opt::logical::PushStreamingRangeFuncEvalThroughWideUnpack,
+            ))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LiftConstantProjections))
             .with_optimizer_rule(Arc::new(crate::opt::logical::FoldRedundantAggregation))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RemoveNoopProjections))

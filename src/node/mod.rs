@@ -6,6 +6,7 @@ mod range_eval;
 mod range_func_eval;
 mod step_eval;
 mod streaming_range_func_eval;
+mod wide_streaming_range_func_eval;
 mod wide_unpack;
 
 pub(crate) use binary_eval::{
@@ -18,4 +19,5 @@ pub(crate) use range_eval::RangeVectorEval;
 pub(crate) use range_func_eval::RangeFunctionEval;
 pub use step_eval::StepVectorEval;
 pub use streaming_range_func_eval::StreamingRangeFunctionEval;
-pub(crate) use wide_unpack::{WideColumnMeta, WideUnpack};
+pub use wide_streaming_range_func_eval::WideStreamingRangeFunctionEval;
+pub use wide_unpack::{WideColumnMeta, WideUnpack};

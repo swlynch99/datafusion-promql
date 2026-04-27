@@ -4,6 +4,7 @@ mod range_eval;
 mod range_func_eval;
 mod step_eval;
 mod streaming_range_func_eval;
+mod wide_streaming_range_func_eval;
 mod wide_unpack;
 
 pub(crate) use binary_eval::{BinaryExec, ScalarBinaryExec};
@@ -12,6 +13,7 @@ pub(crate) use range_eval::RangeVectorExec;
 pub(crate) use range_func_eval::RangeFunctionExec;
 pub(crate) use step_eval::StepVectorExec;
 pub(crate) use streaming_range_func_eval::StreamingRangeFuncExec;
+pub(crate) use wide_streaming_range_func_eval::WideStreamingRangeFuncExec;
 pub(crate) use wide_unpack::WideUnpackExec;
 
 use std::sync::Arc;
@@ -30,7 +32,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::node::{
     BinaryEval, InstantVectorEval, RangeFunctionEval, RangeVectorEval, ScalarBinaryEval,
-    StepVectorEval, StreamingRangeFunctionEval, WideUnpack,
+    StepVectorEval, StreamingRangeFunctionEval, WideStreamingRangeFunctionEval, WideUnpack,
 };
 
 /// Extension planner that converts our custom logical nodes into physical plans.
@@ -101,6 +103,24 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 eval.offset_ns,
                 eval.at_timestamp_ns,
                 (*eval.label_columns).clone(),
+            );
+            return Ok(Some(Arc::new(exec)));
+        }
+
+        if let Some(eval) = node
+            .as_any()
+            .downcast_ref::<WideStreamingRangeFunctionEval>()
+        {
+            let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
+            let exec = WideStreamingRangeFuncExec::new(
+                child,
+                eval.func,
+                eval.scalar_arg,
+                eval.range_ns,
+                eval.eval_timestamps(),
+                eval.offset_ns,
+                eval.at_timestamp_ns,
+                (*eval.value_columns).clone(),
             );
             return Ok(Some(Arc::new(exec)));
         }
