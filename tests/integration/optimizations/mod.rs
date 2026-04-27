@@ -1,6 +1,7 @@
 mod dedupe_subplans;
 mod fold_redundant_aggregation;
 mod lift_constant_projections;
+mod prune_wide_unpack_columns;
 mod push_instant_eval_through_union;
 mod push_step_eval_through_union;
 mod push_streaming_range_func_eval_through_union;

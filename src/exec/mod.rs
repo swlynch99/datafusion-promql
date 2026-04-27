@@ -177,6 +177,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
                 child,
                 (*unpack.columns).clone(),
                 (*unpack.label_keys).clone(),
+                unpack.include_name,
             );
             return Ok(Some(Arc::new(exec)));
         }

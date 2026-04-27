@@ -27,8 +27,10 @@ pub struct WideColumnMeta {
 /// Input: a plan whose schema has `(timestamp: UInt64, col_0: F64, col_1: F64, ...)`
 /// — one timestamp column and N value columns, all from a single table scan.
 ///
-/// Output: `(timestamp: UInt64, value: Float64, __name__: Utf8, label_key_0: Utf8, ...)`
-/// — standard long format with one row per (timestamp, series) pair.
+/// Output: `(timestamp: UInt64, value: Float64, [__name__: Utf8,] label_key_0: Utf8, ...)`
+/// — standard long format with one row per (timestamp, series) pair. The
+/// `__name__` column is included only when [`WideUnpack::include_name`] is
+/// `true`; it can be elided when nothing above this node reads it.
 ///
 /// For each input row, this node logically produces N output rows, one per
 /// value column. Each output row carries the value from that column and
@@ -45,29 +47,52 @@ pub struct WideUnpack {
     pub input: LogicalPlan,
     /// Metadata for each value column to unpack.
     pub columns: Arc<Vec<WideColumnMeta>>,
-    /// The union of all label keys across all columns, sorted.
+    /// Label keys to emit as output columns, in order. A column is omitted
+    /// from the output schema iff its key is absent from this list, regardless
+    /// of whether some [`WideColumnMeta`] carries that label.
     pub label_keys: Arc<Vec<String>>,
-    /// Output schema: (timestamp, value, __name__, label_key_0, ...).
+    /// Whether to emit the `__name__` column. Set to `false` by the column-
+    /// pruning rule when no consumer reads it.
+    pub include_name: bool,
+    /// Output schema: (timestamp, value, [__name__,] label_key_0, ...).
     pub output_schema: DFSchemaRef,
 }
 
 impl WideUnpack {
+    /// Build a `WideUnpack` that emits the standard long-format schema
+    /// including `__name__`.
     pub fn new(
         input: LogicalPlan,
         columns: Arc<Vec<WideColumnMeta>>,
         label_keys: Arc<Vec<String>>,
     ) -> Result<Self> {
-        let output_schema = compute_output_schema(&input, &label_keys)?;
+        Self::new_with_options(input, columns, label_keys, true)
+    }
+
+    /// Build a `WideUnpack` with explicit control over which output columns
+    /// are emitted.
+    pub fn new_with_options(
+        input: LogicalPlan,
+        columns: Arc<Vec<WideColumnMeta>>,
+        label_keys: Arc<Vec<String>>,
+        include_name: bool,
+    ) -> Result<Self> {
+        let output_schema = compute_output_schema(&input, &label_keys, include_name)?;
         Ok(Self {
             input,
             columns,
             label_keys,
+            include_name,
             output_schema,
         })
     }
 }
 
-fn compute_output_schema(input: &LogicalPlan, label_keys: &[String]) -> Result<DFSchemaRef> {
+fn compute_output_schema(
+    input: &LogicalPlan,
+    label_keys: &[String],
+    include_name: bool,
+) -> Result<DFSchemaRef> {
     // Verify the input has a timestamp column.
     let _ts = input
         .schema()
@@ -77,8 +102,10 @@ fn compute_output_schema(input: &LogicalPlan, label_keys: &[String]) -> Result<D
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new("value", DataType::Float64, true),
-        Field::new("__name__", DataType::Utf8, false),
     ];
+    if include_name {
+        fields.push(Field::new("__name__", DataType::Utf8, false));
+    }
     for key in label_keys {
         fields.push(Field::new(key, DataType::Utf8, true));
     }
@@ -108,9 +135,10 @@ impl UserDefinedLogicalNodeCore for WideUnpack {
     fn fmt_for_explain(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "WideUnpack: {} columns, labels=[{}]",
+            "WideUnpack: {} columns, labels=[{}]{}",
             self.columns.len(),
-            self.label_keys.join(", ")
+            self.label_keys.join(", "),
+            if self.include_name { "" } else { ", no_name" }
         )
     }
 
@@ -123,6 +151,7 @@ impl UserDefinedLogicalNodeCore for WideUnpack {
             input: inputs.into_iter().next().unwrap(),
             columns: self.columns.clone(),
             label_keys: self.label_keys.clone(),
+            include_name: self.include_name,
             output_schema: self.output_schema.clone(),
         })
     }
@@ -142,7 +171,9 @@ impl UserDefinedLogicalNodeCore for WideUnpack {
 
 impl PartialEq for WideUnpack {
     fn eq(&self, other: &Self) -> bool {
-        self.columns == other.columns && self.label_keys == other.label_keys
+        self.columns == other.columns
+            && self.label_keys == other.label_keys
+            && self.include_name == other.include_name
     }
 }
 
@@ -152,6 +183,7 @@ impl Hash for WideUnpack {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.columns.hash(state);
         self.label_keys.hash(state);
+        self.include_name.hash(state);
     }
 }
 
