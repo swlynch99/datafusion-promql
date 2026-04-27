@@ -22,9 +22,11 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
 use crate::func::RangeFunction;
+use crate::node::ColumnRangeFunc;
 
-/// Physical plan node that applies a range function to every value column of
-/// a wide-format input using a single-pass sliding-window algorithm.
+/// Physical plan node that applies a (per-column) range function to every
+/// value column of a wide-format input using a single-pass sliding-window
+/// algorithm.
 ///
 /// Input schema: `(timestamp: UInt64, col_0: Float64, …, col_N: Float64)`
 /// sorted by `timestamp ASC`.
@@ -35,13 +37,16 @@ use crate::func::RangeFunction;
 /// eval timestamp, or null if the function returns `None` (e.g. too few
 /// samples in the window for that series).
 ///
+/// Each value column has its own [`ColumnRangeFunc`] in `funcs`, so different
+/// columns can apply different range functions in the same pass. `funcs` is
+/// parallel to `value_columns`.
+///
 /// Rows in which every value column is null are skipped to avoid emitting
 /// work for the downstream `WideUnpackExec` that would just be filtered out.
 #[derive(Debug)]
 pub(crate) struct WideStreamingRangeFuncExec {
     child: Arc<dyn ExecutionPlan>,
-    func: RangeFunction,
-    scalar_arg: Option<f64>,
+    funcs: Vec<ColumnRangeFunc>,
     range_ns: u64,
     eval_timestamps: Vec<u64>,
     offset_ns: i64,
@@ -64,14 +69,20 @@ impl WideStreamingRangeFuncExec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
-        func: RangeFunction,
-        scalar_arg: Option<f64>,
+        funcs: Vec<ColumnRangeFunc>,
         range_ns: u64,
         eval_timestamps: Vec<u64>,
         offset_ns: i64,
         at_timestamp_ns: Option<u64>,
         value_columns: Vec<String>,
     ) -> Self {
+        assert_eq!(
+            funcs.len(),
+            value_columns.len(),
+            "WideStreamingRangeFuncExec: funcs.len() ({}) must match value_columns.len() ({})",
+            funcs.len(),
+            value_columns.len(),
+        );
         let output_schema = compute_output_schema(&value_columns);
 
         let asc_nulls_last = SortOptions {
@@ -96,8 +107,7 @@ impl WideStreamingRangeFuncExec {
         ));
         Self {
             child,
-            func,
-            scalar_arg,
+            funcs,
             range_ns,
             eval_timestamps,
             offset_ns,
@@ -112,10 +122,21 @@ impl WideStreamingRangeFuncExec {
 
 impl DisplayAs for WideStreamingRangeFuncExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut distinct: Vec<RangeFunction> = Vec::new();
+        for cf in &self.funcs {
+            if !distinct.contains(&cf.func) {
+                distinct.push(cf.func);
+            }
+        }
+        let funcs_str = distinct
+            .iter()
+            .map(|f| f.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         write!(
             f,
-            "WideStreamingRangeFuncExec: func={}, range={}ns, columns={}",
-            self.func,
+            "WideStreamingRangeFuncExec: funcs=[{}], range={}ns, columns={}",
+            funcs_str,
             self.range_ns,
             self.value_columns.len()
         )
@@ -171,8 +192,7 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.func,
-            self.scalar_arg,
+            self.funcs.clone(),
             self.range_ns,
             self.eval_timestamps.clone(),
             self.offset_ns,
@@ -188,8 +208,7 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
     ) -> Result<SendableRecordBatchStream> {
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let output_schema = Arc::clone(&self.output_schema);
-        let func = self.func;
-        let scalar_arg = self.scalar_arg;
+        let funcs = self.funcs.clone();
         let range_ns = self.range_ns;
         let eval_timestamps = self.eval_timestamps.clone();
         let offset_ns = self.offset_ns;
@@ -215,8 +234,7 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
                 range_ns,
                 offset_ns,
                 at_timestamp_ns,
-                func,
-                scalar_arg,
+                &funcs,
                 &value_columns,
                 &output_schema,
             )?;
@@ -305,12 +323,12 @@ fn compute_wide_streaming_windows(
     range_ns: u64,
     offset_ns: i64,
     at_timestamp_ns: Option<u64>,
-    func: RangeFunction,
-    scalar_arg: Option<f64>,
+    funcs: &[ColumnRangeFunc],
     value_columns: &[String],
     output_schema: &SchemaRef,
 ) -> Result<RecordBatch> {
     let n_cols = value_columns.len();
+    debug_assert_eq!(funcs.len(), n_cols);
 
     let mut out_ts = UInt64Builder::new();
     let mut out_vals: Vec<Float64Builder> = value_columns
@@ -331,11 +349,12 @@ fn compute_wide_streaming_windows(
         // Evict stale samples per column and compute results.
         let mut results: Vec<Option<f64>> = Vec::with_capacity(n_cols);
         let mut any_some = false;
-        for w in windows.iter_mut() {
+        for (c, w) in windows.iter_mut().enumerate() {
             while w.front().map(|(t, _)| *t < window_start).unwrap_or(false) {
                 w.pop_front();
             }
-            let r = apply_func(func, w, eval_t, scalar_arg);
+            let cf = funcs[c];
+            let r = apply_func(cf.func, w, eval_t, cf.scalar_arg);
             if r.is_some() {
                 any_some = true;
             }

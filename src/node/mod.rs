@@ -19,5 +19,5 @@ pub(crate) use range_eval::RangeVectorEval;
 pub(crate) use range_func_eval::RangeFunctionEval;
 pub use step_eval::StepVectorEval;
 pub use streaming_range_func_eval::StreamingRangeFunctionEval;
-pub use wide_streaming_range_func_eval::WideStreamingRangeFunctionEval;
+pub use wide_streaming_range_func_eval::{ColumnRangeFunc, WideStreamingRangeFunctionEval};
 pub use wide_unpack::{WideColumnMeta, WideUnpack};

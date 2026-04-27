@@ -114,8 +114,7 @@ impl ExtensionPlanner for PromqlExtensionPlanner {
             let child = coalesce_if_needed(Arc::clone(&physical_inputs[0]));
             let exec = WideStreamingRangeFuncExec::new(
                 child,
-                eval.func,
-                eval.scalar_arg,
+                (*eval.funcs).clone(),
                 eval.range_ns,
                 eval.eval_timestamps(),
                 eval.offset_ns,
