@@ -104,6 +104,25 @@ impl RangeFunction {
         }
     }
 
+    /// Maximum number of trailing samples this function actually consults.
+    ///
+    /// Functions whose result depends only on a bounded number of the most
+    /// recent samples in the window (e.g. `irate` / `idelta` only ever read
+    /// the last two; `last_over_time` / `present_over_time` only the last
+    /// one) return `Some(n)`. All other functions need the full sliding
+    /// window of samples and return `None`.
+    ///
+    /// This is used by the streaming range execs and the physical optimizer
+    /// to cap per-series memory: older samples within the time window can be
+    /// discarded without changing the result.
+    pub fn max_samples_needed(&self) -> Option<usize> {
+        match self {
+            Self::Irate | Self::Idelta => Some(2),
+            Self::LastOverTime | Self::PresentOverTime => Some(1),
+            _ => None,
+        }
+    }
+
     /// Evaluate the range function over a window of `(timestamp_ns, value)` samples.
     ///
     /// Samples must be sorted by timestamp. Returns `None` if there are

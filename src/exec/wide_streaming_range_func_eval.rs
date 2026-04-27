@@ -52,6 +52,12 @@ pub(crate) struct WideStreamingRangeFuncExec {
     offset_ns: i64,
     at_timestamp_ns: Option<u64>,
     value_columns: Vec<String>,
+    /// Per-column sliding-window sample cap. `None` means each column's
+    /// deque is bounded only by the time window; otherwise every column's
+    /// deque is capped to this many trailing samples.
+    ///
+    /// Set by the `ReduceStreamingRangeWindow` physical optimizer rule.
+    max_window_samples: Option<usize>,
     output_schema: SchemaRef,
     properties: Arc<PlanProperties>,
     metrics: ExecutionPlanMetricsSet,
@@ -113,10 +119,48 @@ impl WideStreamingRangeFuncExec {
             offset_ns,
             at_timestamp_ns,
             value_columns,
+            max_window_samples: None,
             output_schema,
             properties,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+
+    /// Return a copy with the per-series sliding-window sample cap set.
+    pub fn with_max_window_samples(mut self, max: Option<usize>) -> Self {
+        self.max_window_samples = max;
+        self
+    }
+
+    pub fn funcs(&self) -> &[ColumnRangeFunc] {
+        &self.funcs
+    }
+
+    pub fn max_window_samples(&self) -> Option<usize> {
+        self.max_window_samples
+    }
+
+    /// Build a new exec with the same parameters as `self` but with a
+    /// different per-series sample cap. Used by the physical optimizer to
+    /// rewrite the node without touching its children.
+    pub fn clone_with_max_window_samples(
+        &self,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        max: Option<usize>,
+    ) -> Self {
+        Self::new(
+            children
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| Arc::clone(&self.child)),
+            self.funcs.clone(),
+            self.range_ns,
+            self.eval_timestamps.clone(),
+            self.offset_ns,
+            self.at_timestamp_ns,
+            self.value_columns.clone(),
+        )
+        .with_max_window_samples(max)
     }
 }
 
@@ -139,7 +183,11 @@ impl DisplayAs for WideStreamingRangeFuncExec {
             funcs_str,
             self.range_ns,
             self.value_columns.len()
-        )
+        )?;
+        if let Some(cap) = self.max_window_samples {
+            write!(f, ", max_samples={cap}")?;
+        }
+        Ok(())
     }
 }
 
@@ -190,15 +238,18 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(Self::new(
-            Arc::clone(&children[0]),
-            self.funcs.clone(),
-            self.range_ns,
-            self.eval_timestamps.clone(),
-            self.offset_ns,
-            self.at_timestamp_ns,
-            self.value_columns.clone(),
-        )))
+        Ok(Arc::new(
+            Self::new(
+                Arc::clone(&children[0]),
+                self.funcs.clone(),
+                self.range_ns,
+                self.eval_timestamps.clone(),
+                self.offset_ns,
+                self.at_timestamp_ns,
+                self.value_columns.clone(),
+            )
+            .with_max_window_samples(self.max_window_samples),
+        ))
     }
 
     fn execute(
@@ -214,6 +265,11 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
         let offset_ns = self.offset_ns;
         let at_timestamp_ns = self.at_timestamp_ns;
         let value_columns = self.value_columns.clone();
+        // The optimizer-supplied cap takes precedence; otherwise fall back
+        // to the intrinsic minimum derived from the column functions so
+        // memory is still bounded for irate/idelta workloads when the rule
+        // hasn't been registered.
+        let max_window_samples = self.max_window_samples.or_else(|| default_cap(&funcs));
         let schema_for_stream = Arc::clone(&output_schema);
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
@@ -228,7 +284,7 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
 
             let _timer = baseline_metrics.elapsed_compute().timer();
 
-            let batch = compute_wide_streaming_windows(
+            let batch = compute_wide_streaming_windows_with_cap(
                 batches,
                 &eval_timestamps,
                 range_ns,
@@ -237,6 +293,7 @@ impl ExecutionPlan for WideStreamingRangeFuncExec {
                 &funcs,
                 &value_columns,
                 &output_schema,
+                max_window_samples,
             )?;
             Ok(batch.record_output(&baseline_metrics))
         });
@@ -258,21 +315,24 @@ fn effective_ts(eval_t: u64, at_timestamp_ns: Option<u64>, offset_ns: i64) -> u6
     (lookup as i64 - offset_ns) as u64
 }
 
-/// If every column is `irate`/`idelta`, only the last two samples per column
-/// are ever consulted (see `apply_func`), so the deque can be capped at 2.
-/// Mixing with other range functions disables the cap because those functions
-/// need the full sliding window.
+/// Default per-series sample cap derived from the column functions.
+///
+/// All deques share a single cap, so this returns the maximum of every
+/// column's [`RangeFunction::max_samples_needed`]; if any column needs the
+/// full window (returns `None`), the deque must be uncapped.
 #[inline]
-fn deque_cap(funcs: &[ColumnRangeFunc]) -> Option<usize> {
-    if !funcs.is_empty()
-        && funcs
-            .iter()
-            .all(|cf| matches!(cf.func, RangeFunction::Irate | RangeFunction::Idelta))
-    {
-        Some(2)
-    } else {
-        None
+fn default_cap(funcs: &[ColumnRangeFunc]) -> Option<usize> {
+    if funcs.is_empty() {
+        return None;
     }
+    let mut cap = 0usize;
+    for cf in funcs {
+        match cf.func.max_samples_needed() {
+            Some(n) => cap = cap.max(n),
+            None => return None,
+        }
+    }
+    Some(cap)
 }
 
 /// Apply a range function to a sliding-window deque. Mirrors the hot-path
@@ -333,31 +393,6 @@ fn apply_func(
 /// long-format version in `streaming_range_func_eval.rs`: a sample at
 /// timestamp `ts` is pushed to its column's deque only *after* flushing
 /// every eval timestamp whose effective end is strictly less than `ts`.
-#[allow(clippy::too_many_arguments)]
-fn compute_wide_streaming_windows(
-    batches: Vec<RecordBatch>,
-    eval_timestamps: &[u64],
-    range_ns: u64,
-    offset_ns: i64,
-    at_timestamp_ns: Option<u64>,
-    funcs: &[ColumnRangeFunc],
-    value_columns: &[String],
-    output_schema: &SchemaRef,
-) -> Result<RecordBatch> {
-    let cap = deque_cap(funcs);
-    compute_wide_streaming_windows_with_cap(
-        batches,
-        eval_timestamps,
-        range_ns,
-        offset_ns,
-        at_timestamp_ns,
-        funcs,
-        value_columns,
-        output_schema,
-        cap,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn compute_wide_streaming_windows_with_cap(
     batches: Vec<RecordBatch>,
@@ -505,14 +540,14 @@ mod tests {
     }
 
     #[test]
-    fn deque_cap_uniform_irate_idelta() {
+    fn default_cap_uniform_irate_idelta() {
         let s = None;
         assert_eq!(
-            deque_cap(&[ColumnRangeFunc::new(RangeFunction::Irate, s)]),
+            default_cap(&[ColumnRangeFunc::new(RangeFunction::Irate, s)]),
             Some(2)
         );
         assert_eq!(
-            deque_cap(&[
+            default_cap(&[
                 ColumnRangeFunc::new(RangeFunction::Irate, s),
                 ColumnRangeFunc::new(RangeFunction::Idelta, s),
             ]),
@@ -521,22 +556,43 @@ mod tests {
     }
 
     #[test]
-    fn deque_cap_disabled_when_mixed() {
+    fn default_cap_uniform_last_or_present_over_time() {
+        let s = None;
+        assert_eq!(
+            default_cap(&[ColumnRangeFunc::new(RangeFunction::LastOverTime, s)]),
+            Some(1)
+        );
+        assert_eq!(
+            default_cap(&[ColumnRangeFunc::new(RangeFunction::PresentOverTime, s)]),
+            Some(1)
+        );
+        // Mix of last/present + irate: take the maximum of needed samples.
+        assert_eq!(
+            default_cap(&[
+                ColumnRangeFunc::new(RangeFunction::LastOverTime, s),
+                ColumnRangeFunc::new(RangeFunction::Irate, s),
+            ]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn default_cap_disabled_when_full_window_needed() {
         let s = None;
         // Mixing irate with rate must keep the full window.
         assert_eq!(
-            deque_cap(&[
+            default_cap(&[
                 ColumnRangeFunc::new(RangeFunction::Irate, s),
                 ColumnRangeFunc::new(RangeFunction::Rate, s),
             ]),
             None
         );
         assert_eq!(
-            deque_cap(&[ColumnRangeFunc::new(RangeFunction::Rate, s)]),
+            default_cap(&[ColumnRangeFunc::new(RangeFunction::Rate, s)]),
             None
         );
         // Empty funcs (defensive).
-        assert_eq!(deque_cap(&[]), None);
+        assert_eq!(default_cap(&[]), None);
     }
 
     #[test]

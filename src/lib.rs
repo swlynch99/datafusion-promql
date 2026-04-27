@@ -76,6 +76,9 @@ impl PromqlPlanner {
             .with_optimizer_rule(Arc::new(crate::opt::logical::PruneWideUnpackColumns))
             .with_optimizer_rule(Arc::new(crate::opt::logical::LowerTrivialWideUnpack))
             .with_optimizer_rule(Arc::new(crate::opt::logical::RemoveNoopProjections))
+            .with_physical_optimizer_rule(Arc::new(
+                crate::opt::physical::ReduceStreamingRangeWindow::new(),
+            ))
             .build();
         let ctx = SessionContext::new_with_state(state);
         Self { ctx, source }
