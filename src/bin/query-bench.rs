@@ -73,7 +73,7 @@ async fn bench_range(
     end_ns: u64,
     step_s: u64,
     iters: usize,
-) -> Phase {
+) -> Result<Phase, Box<dyn std::error::Error>> {
     let start = DateTime::from_timestamp_nanos(start_ns as i64);
     let end = DateTime::from_timestamp_nanos(end_ns as i64);
     let step = Duration::from_secs(step_s);
@@ -94,41 +94,36 @@ async fn bench_range(
 
         // Parse in isolation so we can separate AST construction from planning.
         let t0 = Instant::now();
-        let _ = promql_parser::parser::parse(query).expect("parse");
+        promql_parser::parser::parse(query).map_err(|e| format!("parse: {e}"))?;
         phase.parse.push(t0.elapsed());
 
         let t0 = Instant::now();
-        let logical = planner
-            .range_logical_plan(query, start, end, step)
-            .await
-            .unwrap();
+        let logical = planner.range_logical_plan(query, start, end, step).await?;
         phase.plan.push(t0.elapsed());
         if i == 0 {
             phase.logical_nodes = logical_node_count(&logical);
         }
 
         let t0 = Instant::now();
-        let optimized = planner.optimize_logical_plan(logical).unwrap();
+        let optimized = planner.optimize_logical_plan(logical)?;
         let filtered = LogicalPlanBuilder::from(optimized)
-            .filter(col("value").is_not_null())
-            .unwrap()
-            .build()
-            .unwrap();
-        let with_agg = PromqlPlanner::add_matrix_series_aggregation(filtered).unwrap();
+            .filter(col("value").is_not_null())?
+            .build()?;
+        let with_agg = PromqlPlanner::add_matrix_series_aggregation(filtered)?;
         phase.opt.push(t0.elapsed());
         if i == 0 {
             phase.optimized_nodes = logical_node_count(&with_agg);
         }
 
         let t0 = Instant::now();
-        let physical = planner.create_physical_plan(&with_agg).await.unwrap();
+        let physical = planner.create_physical_plan(&with_agg).await?;
         phase.phys.push(t0.elapsed());
         if i == 0 {
             phase.physical_nodes = physical_node_count(physical.as_ref());
         }
 
         let t0 = Instant::now();
-        let batches = planner.execute(physical).await.unwrap();
+        let batches = planner.execute(physical).await?;
         phase.exec.push(t0.elapsed());
         if i == 0 {
             phase.result_rows = batches.iter().map(|b| b.num_rows()).sum();
@@ -136,7 +131,7 @@ async fn bench_range(
 
         phase.total.push(total_t0.elapsed());
     }
-    phase
+    Ok(phase)
 }
 
 fn pct(vs: &mut [Duration], p: f64) -> f64 {
@@ -309,63 +304,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let start_ns = (min_ns / NS_PER_SEC) * NS_PER_SEC;
     let end_ns = (max_ns / NS_PER_SEC) * NS_PER_SEC;
 
-    // Queries grouped rough-coarse-to-fine. The first seven match the
-    // original bench so we can track regressions; the rest stress harder
-    // code paths.
     let queries: Vec<(&str, &str)> = vec![
-        // --- original set (kept so numbers stay comparable) ---
-        ("q1_selector", "cpu_cores"),
-        ("q2_rate", "rate(cpu_usage[60s])"),
-        ("q3_sum_by", "sum by (id) (rate(cpu_usage[60s]))"),
-        ("q4_scalar_bin", "rate(cpu_usage[60s]) * 100"),
+        ("q01_selector", "cpu_cores"),
+        ("q02_rate", "rate(cpu_usage[60s])"),
+        ("q03_irate", "irate(cpu_usage[60s])"),
+        ("q04_increase", "increase(cpu_usage[60s])"),
+        ("q05_delta", "delta(cpu_usage[60s])"),
+        ("q06_idelta", "idelta(cpu_usage[60s])"),
+        ("q07_deriv", "deriv(cpu_usage[60s])"),
+        ("q08_predict_linear", "predict_linear(cpu_usage[60s], 30)"),
+        ("q09_sum_over_time", "sum_over_time(cpu_usage[60s])"),
         (
-            "q5_vec_bin",
-            "rate(cpu_usage[60s]) / ignoring(op) group_left sum by (id) (rate(cpu_usage[60s]))",
+            "q10_avg_over_time_wide",
+            "avg_over_time(cgroup_cpu_usage[60s])",
         ),
-        ("q6_instant_fn", "abs(cpu_cores - 4)"),
-        ("q7_topk", "topk(3, rate(cpu_usage[60s]))"),
-        // --- harder patterns ---
-        // Stacked aggregation: topk over a grouped sum.
+        ("q11_max_over_time", "max_over_time(cpu_usage[60s])"),
+        ("q12_stddev_over_time", "stddev_over_time(cpu_usage[60s])"),
         (
-            "q8_topk_of_sum_by",
-            "topk(3, sum by (id) (rate(cpu_usage[60s])))",
+            "q13_quantile_over_time",
+            "quantile_over_time(0.95, cpu_usage[60s])",
         ),
-        // `without`: forces a larger grouping set (all labels minus `op`).
-        ("q9_sum_without", "sum without (op) (rate(cpu_usage[60s]))"),
-        // Deep instant-function pipeline over a rate.
+        ("q14_last_over_time", "last_over_time(cpu_usage[60s])"),
+        ("q15_count_over_time", "count_over_time(cpu_usage[60s])"),
+        ("q16_sqrt_rate", "sqrt(rate(cpu_usage[60s]))"),
+        ("q17_ln_plus1", "ln(rate(cpu_usage[60s]) + 1)"),
+        ("q18_clamp", "clamp(rate(cpu_usage[60s]), 0, 1)"),
+        ("q19_trig_combo", "sin(cpu_cores) + cos(cpu_cores)"),
         (
-            "q10_deep_instant",
+            "q20_deep_instant",
             "abs(ceil(rate(cpu_usage[60s]) * 1000 - 500)) / 1000",
         ),
-        // Ratio of two rates aggregated independently — exercises vec/vec binop
-        // with explicit `on(...)`.
+        ("q21_sum_by", "sum by (id) (rate(cpu_usage[60s]))"),
+        ("q22_sum_without", "sum without (op) (rate(cpu_usage[60s]))"),
+        ("q23_stddev_agg", "stddev by (id) (rate(cpu_usage[60s]))"),
         (
-            "q11_ratio_rates",
+            "q24_quantile_agg",
+            "quantile by (id) (0.9, rate(cpu_usage[60s]))",
+        ),
+        ("q25_topk", "topk(3, rate(cpu_usage[60s]))"),
+        ("q26_bottomk", "bottomk(3, rate(cpu_usage[60s]))"),
+        (
+            "q27_count_values",
+            "count_values(\"v\", round(rate(cpu_usage[60s]) * 100))",
+        ),
+        (
+            "q28_vec_bin_on",
             "sum by (id) (rate(cpu_usage[60s])) / on(id) \
              sum by (id) (rate(cpu_migrations[60s]))",
         ),
-        // label_replace feeding an aggregation by the synthesised label.
         (
-            "q12_label_replace",
-            "sum by (device) (label_replace(rate(blockio_bytes[60s]), \
-             \"device\", \"$1\", \"op\", \"(.+)\"))",
+            "q29_groupleft_ignoring",
+            "rate(cpu_usage[60s]) / ignoring(op) group_left \
+             sum by (id) (rate(cpu_usage[60s]))",
         ),
-        // group_left with explicit `on` — many-to-one over a smaller side.
         (
-            "q13_groupleft_on",
+            "q30_groupleft_on",
             "rate(cpu_usage[60s]) / on(id) group_left \
              sum by (id) (rate(cpu_usage[60s]))",
         ),
-        // Range aggregation — quantile_over_time over the raw gauge.
+        ("q31_bool_compare", "rate(cpu_usage[60s]) > bool 0.5"),
         (
-            "q14_quantile_over_time",
-            "quantile_over_time(0.95, cpu_usage[60s])",
+            "q32_and_op",
+            "sum by (id) (rate(cpu_usage[60s])) and on(id) \
+             sum by (id) (rate(cpu_migrations[60s]))",
         ),
-        // avg_over_time over a wide, label-heavy metric (stresses range
-        // eval sliding window + wide→long unpacking).
         (
-            "q15_avg_over_time_wide",
-            "avg_over_time(cgroup_cpu_usage[60s])",
+            "q33_unless_op",
+            "(sum by (id) (rate(cpu_usage[60s])) > 0) unless \
+             (sum by (id) (rate(cpu_migrations[60s])) > 0)",
+        ),
+        (
+            "q34_label_replace",
+            "label_replace(rate(cpu_usage[60s]), \"cpu\", \"cpu_$1\", \"id\", \"(.*)\")",
+        ),
+        (
+            "q35_label_join",
+            "label_join(rate(cpu_usage[60s]), \"key\", \"_\", \"id\", \"op\")",
+        ),
+        ("q36_datetime", "hour(timestamp(cpu_cores))"),
+        ("q37_sort_desc", "sort_desc(rate(cpu_usage[60s]))"),
+        (
+            "q38_cross_metric_ratio",
+            "sum by (cgroup) (rate(cgroup_cpu_usage[60s])) / on(cgroup) \
+             sum by (cgroup) (rate(cgroup_cpu_cycles[60s]))",
         ),
     ];
 
@@ -394,20 +415,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     for (name, q) in &filtered {
-        let mut p = bench_range(&planner, q, start_ns, end_ns, step_s, iters).await;
-        println!(
-            "{:<24} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>8.2} {:>6.2} {:>6} {:>6} {:>6}",
-            name,
-            pct(&mut p.parse, 0.5),
-            pct(&mut p.plan, 0.5),
-            pct(&mut p.opt, 0.5),
-            pct(&mut p.phys, 0.5),
-            pct(&mut p.exec, 0.5),
-            pct(&mut p.total, 0.5),
-            p.logical_nodes,
-            p.optimized_nodes,
-            p.physical_nodes,
-        );
+        match bench_range(&planner, q, start_ns, end_ns, step_s, iters).await {
+            Ok(mut p) => println!(
+                "{:<24} {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>8.2} {:>6.2} {:>6} {:>6} {:>6}",
+                name,
+                pct(&mut p.parse, 0.5),
+                pct(&mut p.plan, 0.5),
+                pct(&mut p.opt, 0.5),
+                pct(&mut p.phys, 0.5),
+                pct(&mut p.exec, 0.5),
+                pct(&mut p.total, 0.5),
+                p.logical_nodes,
+                p.optimized_nodes,
+                p.physical_nodes,
+            ),
+            Err(e) => println!("{name:<24} ERROR: {e}"),
+        }
     }
 
     if profile {
