@@ -8,9 +8,9 @@
 //! `metriken-exposition` writes to parquet.
 //!
 //! Sparse storage: a `HistogramArray` only holds entries for buckets with
-//! non-zero counts. Constructors validate this invariant; the convenience
-//! builder [`HistogramArray::from_pairs`] strips zero-count entries from its
-//! input.
+//! non-zero counts. Both constructors silently filter zero-count entries on
+//! the way in, so callers can pass dense input without needing to compact it
+//! first.
 //!
 //! No DataFusion logical-plan integration lives here; this module is pure
 //! Arrow plumbing.
@@ -131,8 +131,8 @@ impl HistogramArray {
     ///
     /// Both lists must have the same outer length and the same per-row inner
     /// length, and the outer null masks must agree. The inner element type
-    /// must be `UInt64`. The sparse invariant is enforced: every stored
-    /// `count` must be non-zero, otherwise this returns an error.
+    /// must be `UInt64`. Entries with `count == 0` are silently filtered out
+    /// to preserve the sparse invariant.
     pub fn try_new(indices: ListArray, counts: ListArray) -> Result<Self, ArrowError> {
         if indices.len() != counts.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -160,25 +160,35 @@ impl HistogramArray {
             }
         }
 
+        let raw_indices = indices
+            .values()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("indices inner type checked above");
+        let raw_counts = counts
+            .values()
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .expect("counts inner type checked above");
+
+        let (indices, counts) = if raw_counts.values().contains(&0) {
+            filter_zero_counts(&indices, raw_indices, &counts, raw_counts)?
+        } else {
+            (indices, counts)
+        };
+
         let indices_values = indices
             .values()
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .expect("indices inner type checked above")
+            .expect("indices inner type preserved by filter")
             .clone();
         let counts_values = counts
             .values()
             .as_any()
             .downcast_ref::<UInt64Array>()
-            .expect("counts inner type checked above")
+            .expect("counts inner type preserved by filter")
             .clone();
-
-        if let Some(pos) = counts_values.values().iter().position(|c| *c == 0) {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "HistogramArray: counts[{pos}] = 0 violates sparse invariant; \
-                 only non-zero buckets may be stored"
-            )));
-        }
 
         let indices_field = Arc::new(Field::new(
             HISTOGRAM_INDICES_FIELD,
@@ -206,7 +216,7 @@ impl HistogramArray {
     /// Build a `HistogramArray` from a slice of `(indices, counts)` rows.
     ///
     /// `u32` indices are widened to `u64` to match the canonical column shape.
-    /// Entries with `count == 0` are stripped on the way in, preserving the
+    /// Entries with `count == 0` are silently filtered out, preserving the
     /// sparse invariant. All rows are non-null; for nullable construction use
     /// [`Self::try_new`].
     pub fn from_pairs(rows: &[(Vec<u32>, Vec<u64>)]) -> Result<Self, ArrowError> {
@@ -311,6 +321,58 @@ fn check_inner_uint64(name: &str, list: &ListArray) -> Result<(), ArrowError> {
             "HistogramArray: {name} must be List<UInt64>, got {other}"
         ))),
     }
+}
+
+fn filter_zero_counts(
+    indices: &ListArray,
+    indices_values: &UInt64Array,
+    counts: &ListArray,
+    counts_values: &UInt64Array,
+) -> Result<(ListArray, ListArray), ArrowError> {
+    let raw_indices = indices_values.values();
+    let raw_counts = counts_values.values();
+    let in_offsets = indices.value_offsets();
+
+    let mut new_indices: Vec<u64> = Vec::with_capacity(raw_counts.len());
+    let mut new_counts: Vec<u64> = Vec::with_capacity(raw_counts.len());
+    let mut new_offsets: Vec<i32> = Vec::with_capacity(indices.len() + 1);
+    new_offsets.push(0);
+
+    for row in 0..indices.len() {
+        if !indices.is_null(row) {
+            let start = in_offsets[row] as usize;
+            let end = in_offsets[row + 1] as usize;
+            for k in start..end {
+                if raw_counts[k] == 0 {
+                    continue;
+                }
+                new_indices.push(raw_indices[k]);
+                new_counts.push(raw_counts[k]);
+            }
+        }
+        new_offsets.push(i32::try_from(new_indices.len()).map_err(|_| {
+            ArrowError::InvalidArgumentError(
+                "HistogramArray: filtered values overflow i32 offsets".into(),
+            )
+        })?);
+    }
+
+    let item_field = Arc::new(Field::new("item", DataType::UInt64, false));
+    let indices_offsets = OffsetBuffer::new(new_offsets.clone().into());
+    let counts_offsets = OffsetBuffer::new(new_offsets.into());
+    let new_indices_list = ListArray::try_new(
+        item_field.clone(),
+        indices_offsets,
+        Arc::new(UInt64Array::from(new_indices)),
+        indices.nulls().cloned(),
+    )?;
+    let new_counts_list = ListArray::try_new(
+        item_field,
+        counts_offsets,
+        Arc::new(UInt64Array::from(new_counts)),
+        counts.nulls().cloned(),
+    )?;
+    Ok((new_indices_list, new_counts_list))
 }
 
 #[cfg(test)]
@@ -486,27 +548,35 @@ mod tests {
     }
 
     #[test]
-    fn try_new_rejects_zero_count() {
+    fn try_new_filters_zero_counts() {
         let item = Arc::new(Field::new("item", DataType::UInt64, false));
-        let offsets = OffsetBuffer::new(vec![0i32, 2].into());
+        let offsets = OffsetBuffer::new(vec![0i32, 3, 3, 5].into());
         let indices = ListArray::try_new(
             item.clone(),
             offsets.clone(),
-            Arc::new(UInt64Array::from(vec![1u64, 2])),
+            Arc::new(UInt64Array::from(vec![1u64, 2, 3, 7, 8])),
             None,
         )
         .unwrap();
         let counts = ListArray::try_new(
             item,
             offsets,
-            Arc::new(UInt64Array::from(vec![5u64, 0])),
+            Arc::new(UInt64Array::from(vec![5u64, 0, 9, 0, 11])),
             None,
         )
         .unwrap();
-        let err = HistogramArray::try_new(indices, counts).unwrap_err();
-        assert!(
-            err.to_string().contains("sparse invariant"),
-            "unexpected error message: {err}"
-        );
+
+        let h = HistogramArray::try_new(indices, counts).unwrap();
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.indices_at(0), &[1u64, 3]);
+        assert_eq!(h.counts_at(0), &[5u64, 9]);
+        assert_eq!(h.indices_at(1), &[] as &[u64]);
+        assert_eq!(h.counts_at(1), &[] as &[u64]);
+        assert_eq!(h.indices_at(2), &[8u64]);
+        assert_eq!(h.counts_at(2), &[11u64]);
+
+        for v in h.counts_at(0) {
+            assert_ne!(*v, 0);
+        }
     }
 }
