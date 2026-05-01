@@ -1,5 +1,6 @@
 pub mod datasource;
 pub mod error;
+pub mod histogram;
 pub mod types;
 
 pub mod exec;
