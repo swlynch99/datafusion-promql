@@ -9,6 +9,8 @@ mod streaming_range_func;
 mod dump_query;
 mod inspect_at_modifier;
 mod inspect_offset;
+#[cfg(feature = "metriken")]
+mod metriken;
 #[cfg(feature = "parquet")]
 mod parquet_query;
 #[cfg(feature = "parquet")]
