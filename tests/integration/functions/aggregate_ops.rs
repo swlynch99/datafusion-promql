@@ -9,7 +9,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::datasource::MemTable;
 
 use datafusion_promql::PromqlEngine;
-use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
+use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat, ValueKind};
 use datafusion_promql::error::Result;
 use datafusion_promql::types::{QueryResult, TimeRange};
 
@@ -46,7 +46,12 @@ impl MetricSource for MultiMetricSource {
                     MemTable::try_new(Arc::clone(schema), vec![batches.clone()]).map_err(|e| {
                         datafusion_promql::error::PromqlError::DataSource(e.to_string())
                     })?;
-                return Ok((Arc::new(table), TableFormat::Long));
+                return Ok((
+                    Arc::new(table),
+                    TableFormat::Long {
+                        value_kind: ValueKind::Scalar,
+                    },
+                ));
             }
         }
         Err(datafusion_promql::error::PromqlError::DataSource(format!(

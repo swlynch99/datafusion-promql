@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::datasource::{ColumnMapping, MatchOp, Matcher};
+use crate::datasource::{ColumnMapping, MatchOp, Matcher, ValueKind};
 use crate::error::{PromqlError, Result};
 use crate::node::{WideColumnMeta, WideUnpack};
 use crate::types::{Labels, TimeRange};
@@ -20,6 +20,8 @@ pub(crate) struct MatchedColumn {
     pub col_name: String,
     /// The labels parsed from the column field metadata.
     pub labels: Labels,
+    /// Kind of the value column (scalar or histogram).
+    pub value_kind: ValueKind,
 }
 
 /// Analyze the wide-format schema and find columns matching the given metric.
@@ -41,16 +43,26 @@ pub(crate) fn find_matching_columns(
             continue;
         }
 
-        // Skip non-numeric columns.
-        match field.data_type() {
-            DataType::UInt64 | DataType::Int64 | DataType::Float64 => {}
-            _ => continue,
-        }
-
-        let (parsed_metric, labels) = match (mapping.parse_column)(field.as_ref()) {
-            Some(pair) => pair,
+        let (parsed_metric, labels, value_kind) = match (mapping.parse_column)(field.as_ref()) {
+            Some(triple) => triple,
             None => continue,
         };
+
+        // The data-type filter depends on the declared value kind. Scalars
+        // must be one of the numeric primitive types we cast through Float64;
+        // histograms must already carry the canonical struct shape (the
+        // parser is responsible for tagging only fields that have it).
+        match value_kind {
+            ValueKind::Scalar => match field.data_type() {
+                DataType::UInt64 | DataType::Int64 | DataType::Float64 => {}
+                _ => continue,
+            },
+            ValueKind::Histogram(_) => {
+                if !matches!(field.data_type(), DataType::Struct(_)) {
+                    continue;
+                }
+            }
+        }
 
         if parsed_metric != metric_name {
             continue;
@@ -63,6 +75,7 @@ pub(crate) fn find_matching_columns(
         matched.push(MatchedColumn {
             col_name: col_name.to_string(),
             labels,
+            value_kind,
         });
     }
 
@@ -161,15 +174,24 @@ pub(crate) fn plan_wide_single_scan(
 
     let mut proj_exprs = vec![ts_expr];
     for mc in &matched {
-        // Cast each value column to Float64, keeping its original name so
-        // WideUnpackExec can look it up by name.
-        proj_exprs.push(
-            cast(
-                Expr::Column(Column::new_unqualified(mc.col_name.as_str())),
-                DataType::Float64,
-            )
-            .alias(mc.col_name.as_str()),
-        );
+        match mc.value_kind {
+            ValueKind::Scalar => {
+                // Cast each scalar value column to Float64, keeping its
+                // original name so WideUnpackExec can look it up by name.
+                proj_exprs.push(
+                    cast(
+                        Expr::Column(Column::new_unqualified(mc.col_name.as_str())),
+                        DataType::Float64,
+                    )
+                    .alias(mc.col_name.as_str()),
+                );
+            }
+            ValueKind::Histogram(_) => {
+                // Histogram columns carry their canonical Struct shape
+                // through unchanged; no cast is meaningful.
+                proj_exprs.push(Expr::Column(Column::new_unqualified(mc.col_name.as_str())));
+            }
+        }
     }
 
     let plan = scan_plan
@@ -189,6 +211,7 @@ pub(crate) fn plan_wide_single_scan(
             col_name: mc.col_name.clone(),
             metric_name: metric_name.to_string(),
             labels: mc.labels.clone(),
+            value_kind: mc.value_kind,
         })
         .collect();
 

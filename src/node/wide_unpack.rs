@@ -8,7 +8,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::{DFSchema, DFSchemaRef};
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNodeCore};
 
+use crate::datasource::ValueKind;
 use crate::error::{PromqlError, Result};
+use crate::histogram::{HistogramConfig, histogram_data_type};
 use crate::types::Labels;
 
 /// Metadata for a single wide-format value column.
@@ -20,6 +22,8 @@ pub struct WideColumnMeta {
     pub metric_name: String,
     /// Label key/value pairs parsed from this column's name or metadata.
     pub labels: Labels,
+    /// Kind of the value column (scalar `Float64` or histogram struct).
+    pub value_kind: ValueKind,
 }
 
 /// Custom logical node that unpacks a wide-format plan into long format.
@@ -77,7 +81,8 @@ impl WideUnpack {
         label_keys: Arc<Vec<String>>,
         include_name: bool,
     ) -> Result<Self> {
-        let output_schema = compute_output_schema(&input, &label_keys, include_name)?;
+        let value_kind = unified_value_kind(&columns)?;
+        let output_schema = compute_output_schema(&input, &label_keys, include_name, value_kind)?;
         Ok(Self {
             input,
             columns,
@@ -88,10 +93,44 @@ impl WideUnpack {
     }
 }
 
+/// Reduce a set of `WideColumnMeta` to a single `ValueKind`.
+///
+/// All matched columns for one metric must share the same value kind: a
+/// metric is either scalar or a histogram, never both. Histogram columns
+/// must additionally agree on bucket layout, since the unpacked `value`
+/// column carries a single [`HistogramConfig`] in its field metadata.
+pub(crate) fn unified_value_kind(columns: &[WideColumnMeta]) -> Result<ValueKind> {
+    let mut iter = columns.iter().map(|c| c.value_kind);
+    let Some(first) = iter.next() else {
+        return Ok(ValueKind::Scalar);
+    };
+    for kind in iter {
+        if kind != first {
+            return Err(PromqlError::Plan(
+                "WideUnpack columns mix incompatible value kinds".into(),
+            ));
+        }
+    }
+    Ok(first)
+}
+
+/// Build the Arrow `Field` for the unpacked `value` column.
+fn value_field(value_kind: ValueKind) -> Field {
+    match value_kind {
+        ValueKind::Scalar => Field::new("value", DataType::Float64, true),
+        ValueKind::Histogram(config) => histogram_value_field(config),
+    }
+}
+
+fn histogram_value_field(config: HistogramConfig) -> Field {
+    Field::new("value", histogram_data_type(&config), true).with_metadata(config.to_metadata())
+}
+
 fn compute_output_schema(
     input: &LogicalPlan,
     label_keys: &[String],
     include_name: bool,
+    value_kind: ValueKind,
 ) -> Result<DFSchemaRef> {
     // Verify the input has a timestamp column.
     let _ts = input
@@ -101,7 +140,7 @@ fn compute_output_schema(
 
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
-        Field::new("value", DataType::Float64, true),
+        value_field(value_kind),
     ];
     if include_name {
         fields.push(Field::new("__name__", DataType::Utf8, false));

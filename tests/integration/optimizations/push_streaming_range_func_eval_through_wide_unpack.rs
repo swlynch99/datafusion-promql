@@ -9,6 +9,7 @@ use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder};
 use datafusion::optimizer::OptimizerRule;
 
 use datafusion_promql::RangeFunction;
+use datafusion_promql::datasource::ValueKind;
 use datafusion_promql::node::{
     StreamingRangeFunctionEval, WideColumnMeta, WideStreamingRangeFunctionEval, WideUnpack,
 };
@@ -48,16 +49,19 @@ fn wrap_unpack(input: LogicalPlan) -> LogicalPlan {
             col_name: "cpu//host-a".to_string(),
             metric_name: "cpu".to_string(),
             labels: a_labels,
+            value_kind: ValueKind::Scalar,
         },
         WideColumnMeta {
             col_name: "cpu//host-b".to_string(),
             metric_name: "cpu".to_string(),
             labels: b_labels,
+            value_kind: ValueKind::Scalar,
         },
         WideColumnMeta {
             col_name: "cpu//host-c".to_string(),
             metric_name: "cpu".to_string(),
             labels: c_labels,
+            value_kind: ValueKind::Scalar,
         },
     ];
     let label_keys = vec!["instance".to_string()];

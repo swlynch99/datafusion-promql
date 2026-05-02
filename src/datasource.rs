@@ -5,11 +5,44 @@ use async_trait::async_trait;
 use datafusion::catalog::TableProvider;
 
 use crate::error::Result;
+use crate::histogram::{HistogramConfig, histogram_config};
 use crate::types::{Labels, TimeRange};
 
-/// Parser function that converts a column field into `(metric_name, labels)`.
-/// Returns `None` if the column should be skipped.
-pub type ColumnParser = Arc<dyn Fn(&Field) -> Option<(String, Labels)> + Send + Sync>;
+/// Kind of values stored in a metric's `value` column.
+///
+/// Lets a [`MetricSource`] declare whether the column carries scalar samples
+/// (Prometheus-style `Float64`) or a native histogram (the canonical
+/// `Struct<indices: List<UInt64>, counts: List<UInt64>>` shape with bucket
+/// layout described by [`HistogramConfig`]). The downstream planner uses
+/// this to route histogram columns into histogram-aware code paths instead
+/// of Float64-only ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ValueKind {
+    /// Standard PromQL scalar value column, typed as `Float64`.
+    Scalar,
+    /// Native histogram value column with the given bucket layout.
+    Histogram(HistogramConfig),
+}
+
+impl ValueKind {
+    /// Infer a `ValueKind` from a column's Arrow `Field`.
+    ///
+    /// Returns [`ValueKind::Histogram`] iff `field` carries the canonical
+    /// histogram column shape and metadata (see
+    /// [`crate::histogram::is_histogram_column`]); otherwise
+    /// [`ValueKind::Scalar`].
+    pub fn from_field(field: &Field) -> Self {
+        match histogram_config(field) {
+            Some(config) => Self::Histogram(config),
+            None => Self::Scalar,
+        }
+    }
+}
+
+/// Parser function that converts a column field into
+/// `(metric_name, labels, value_kind)`. Returns `None` if the column should
+/// be skipped.
+pub type ColumnParser = Arc<dyn Fn(&Field) -> Option<(String, Labels, ValueKind)> + Send + Sync>;
 
 /// Describes the format of the table returned by a [`MetricSource`].
 #[derive(Debug, Clone)]
@@ -17,13 +50,21 @@ pub enum TableFormat {
     /// Canonical long format: one row per (timestamp, series).
     ///
     /// Required columns: `__name__` (Utf8), `timestamp` (Int64 nanoseconds),
-    /// `value` (Float64), plus one Utf8 column per label.
-    Long,
+    /// `value`, plus one Utf8 column per label. The `value` column is
+    /// `Float64` when `value_kind` is [`ValueKind::Scalar`]; for
+    /// [`ValueKind::Histogram`] it carries the canonical histogram struct
+    /// shape produced by [`crate::histogram::histogram_data_type`].
+    Long {
+        /// Kind of the `value` column for the metric being scanned.
+        value_kind: ValueKind,
+    },
 
     /// Wide format: one row per timestamp, one column per metric series.
     ///
     /// The engine will normalize this into long format using the provided
-    /// [`ColumnMapping`].
+    /// [`ColumnMapping`]. Each value column declares its own [`ValueKind`]
+    /// via the [`ColumnMapping::parse_column`] callback, so a single source
+    /// may mix scalar and histogram metrics.
     Wide(ColumnMapping),
 }
 
@@ -34,8 +75,9 @@ pub struct ColumnMapping {
     pub timestamp_column: String,
     /// Columns to ignore (not metrics). E.g. `["duration"]`.
     pub ignore_columns: Vec<String>,
-    /// A function that parses a column field into `(metric_name, labels)`.
-    /// Returns `None` if the column should be skipped.
+    /// A function that parses a column field into
+    /// `(metric_name, labels, value_kind)`. Returns `None` if the column
+    /// should be skipped.
     pub parse_column: ColumnParser,
 }
 

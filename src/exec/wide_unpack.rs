@@ -18,6 +18,8 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 
+use crate::datasource::ValueKind;
+use crate::histogram::histogram_data_type;
 use crate::node::WideColumnMeta;
 
 /// Physical plan node that unpacks wide-format data into long format.
@@ -41,10 +43,19 @@ pub(crate) struct WideUnpackExec {
     metrics: ExecutionPlanMetricsSet,
 }
 
-fn compute_output_schema(label_keys: &[String], include_name: bool) -> SchemaRef {
+fn compute_output_schema(
+    label_keys: &[String],
+    include_name: bool,
+    value_kind: ValueKind,
+) -> SchemaRef {
+    let value_field = match value_kind {
+        ValueKind::Scalar => Field::new("value", DataType::Float64, true),
+        ValueKind::Histogram(config) => Field::new("value", histogram_data_type(&config), true)
+            .with_metadata(config.to_metadata()),
+    };
     let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
-        Field::new("value", DataType::Float64, true),
+        value_field,
     ];
     if include_name {
         fields.push(Field::new("__name__", DataType::Utf8, false));
@@ -55,6 +66,16 @@ fn compute_output_schema(label_keys: &[String], include_name: bool) -> SchemaRef
     Arc::new(Schema::new(fields))
 }
 
+/// All matched columns for one metric must share a single [`ValueKind`].
+/// Defaults to scalar when the column list is empty (only happens for
+/// degenerate plans that never reach execution).
+fn columns_value_kind(columns: &[WideColumnMeta]) -> ValueKind {
+    columns
+        .first()
+        .map(|c| c.value_kind)
+        .unwrap_or(ValueKind::Scalar)
+}
+
 impl WideUnpackExec {
     pub fn new(
         child: Arc<dyn ExecutionPlan>,
@@ -62,7 +83,8 @@ impl WideUnpackExec {
         label_keys: Vec<String>,
         include_name: bool,
     ) -> Self {
-        let output_schema = compute_output_schema(&label_keys, include_name);
+        let value_kind = columns_value_kind(&columns);
+        let output_schema = compute_output_schema(&label_keys, include_name, value_kind);
 
         // Sort so the per-column emission loop produces label-sorted output.
         columns.sort_by(|a, b| {
@@ -185,6 +207,11 @@ impl ExecutionPlan for WideUnpackExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        if matches!(columns_value_kind(&self.columns), ValueKind::Histogram(_)) {
+            return Err(datafusion::error::DataFusionError::NotImplemented(
+                "WideUnpackExec does not yet support histogram value columns".into(),
+            ));
+        }
         let child_stream = self.child.execute(partition, Arc::clone(&context))?;
         let output_schema = Arc::clone(&self.output_schema);
         let columns_meta = self.columns.clone();

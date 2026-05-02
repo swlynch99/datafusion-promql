@@ -175,6 +175,9 @@ impl OptimizerRule for PushSumThroughWideUnpack {
                 col_name: new_col_name,
                 metric_name,
                 labels: new_labels,
+                // sum() is only valid for scalar inputs; the rewritten
+                // projection emits Float64 sums regardless of input layout.
+                value_kind: crate::datasource::ValueKind::Scalar,
             });
         }
 

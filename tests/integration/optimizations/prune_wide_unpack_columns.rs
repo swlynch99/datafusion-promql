@@ -9,6 +9,7 @@ use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder};
 use datafusion::optimizer::OptimizerRule;
 use datafusion::prelude::col;
 
+use datafusion_promql::datasource::ValueKind;
 use datafusion_promql::node::{WideColumnMeta, WideUnpack};
 use datafusion_promql::opt::logical::PruneWideUnpackColumns;
 use datafusion_promql::types::Labels;
@@ -68,6 +69,7 @@ fn build_columns() -> Vec<WideColumnMeta> {
             col_name: col_name.into(),
             metric_name: "cpu".into(),
             labels,
+            value_kind: ValueKind::Scalar,
         }
     };
     vec![
