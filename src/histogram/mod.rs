@@ -17,9 +17,15 @@
 
 pub mod schema;
 
+#[cfg(feature = "histogram")]
+pub mod convert;
+
 pub use schema::{
     VALUE_COLUMN, histogram_config, is_histogram_column, schema_value_is_histogram, value_field,
 };
+
+#[cfg(feature = "histogram")]
+pub use convert::{histogram_to_row, row_to_histogram};
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -40,10 +40,12 @@ bytes = { version = "1", optional = true }
 textplots = { version = "0.8", optional = true }
 rgb = { version = "0.8", optional = true }
 terminal_size = { version = "0.4", optional = true }
+histogram = { version = "1.3", optional = true }
 
 [features]
 parquet = ["datafusion/parquet", "dep:parquet", "dep:object_store", "dep:bytes"]
 plot = ["parquet", "textplots", "rgb", "terminal_size"]
+histogram = ["dep:histogram"]
 
 [dev-dependencies]
 backtrace = "0.3.76"
