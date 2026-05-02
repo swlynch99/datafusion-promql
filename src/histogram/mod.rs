@@ -15,6 +15,12 @@
 //! No DataFusion logical-plan integration lives here; this module is pure
 //! Arrow plumbing.
 
+pub mod schema;
+
+pub use schema::{
+    VALUE_COLUMN, histogram_config, is_histogram_column, schema_value_is_histogram, value_field,
+};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

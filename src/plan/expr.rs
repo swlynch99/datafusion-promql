@@ -24,6 +24,7 @@ use crate::func::{
     lookup_aggregate_function, lookup_datetime_function, lookup_instant_function,
     lookup_range_function, lookup_sort_function, make_label_join_udf, make_label_replace_udf,
 };
+use crate::histogram::schema_value_is_histogram;
 use crate::node::{
     BinaryEval, DateTimeFunctionNode, InstantFunction, InstantVectorEval, MatchCardinality,
     RangeFunctionEval, RangeVectorEval, ScalarBinaryEval, StepVectorEval, VectorMatching,
@@ -71,6 +72,24 @@ pub struct EvalParams {
     pub start_ns: u64,
     pub end_ns: u64,
     pub step_ns: u64,
+}
+
+/// Surface a clean `PromqlError::NotImplemented` if `plan`'s value column is a
+/// histogram-typed column. Used at every plan-time boundary where downstream
+/// code paths assume `value: Float64` — histogram arithmetic, ordering, and
+/// f64-input function dispatch are not yet implemented.
+///
+/// `op` should describe the PromQL operation being attempted (e.g.
+/// `"binary op +"`, `"abs()"`, `"sort()"`). It is used to compose the
+/// resulting error message.
+fn reject_histogram_value(plan: &LogicalPlan, op: &str) -> Result<()> {
+    if schema_value_is_histogram(plan.schema()) {
+        Err(PromqlError::NotImplemented(format!(
+            "operation {op} on histogram column not yet implemented"
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// Extract label column names from a schema (everything except timestamp/value).
@@ -198,6 +217,10 @@ async fn plan_call(
         }
         let vector_arg = &call.args.args[0];
         let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+        // histogram-aware: see Task 2.x. Instant scalar functions
+        // (abs, ceil, sqrt, ...) hard-code an f64 `value` column and would
+        // miscompile against a histogram-typed column.
+        reject_histogram_value(&child_plan, &format!("{func_name}()"))?;
         let func_expr = instant_func_to_expr(&func, col("value"));
         let node = InstantFunction::new(child_plan, func_expr, func.to_string())?;
         return Ok(LogicalPlan::Extension(Extension {
@@ -275,6 +298,11 @@ async fn plan_call(
         // Plan the inner vector selector with extra range expansion.
         let (child_plan, label_columns) =
             plan_vector_selector(&matrix.vs, source, fetch_range, range_ns, offset_ns).await?;
+
+        // histogram-aware: see Task 2.x. Range functions (rate, delta,
+        // *_over_time, ...) compute on f64 sample values; histogram inputs
+        // need histogram-specific implementations (Phase 4).
+        reject_histogram_value(&child_plan, &format!("{func_name}()"))?;
 
         // Wrap in RangeVectorEval (windowing) then RangeFunctionEval (function).
         let label_columns = Arc::new(label_columns);
@@ -354,6 +382,17 @@ async fn plan_call(
         let sort_func = sort_kind.resolve(label_args.clone());
         let vector_arg = &call.args.args[0];
         let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+
+        // histogram-aware: see Task 2.x. `sort` / `sort_desc` order rows by
+        // the scalar value column; histogram values have no total order.
+        // `sort_by_label` / `sort_by_label_desc` only touch label columns
+        // and remain valid against histogram-valued series.
+        if matches!(
+            sort_func,
+            crate::func::sort::SortFunction::Sort | crate::func::sort::SortFunction::SortDesc
+        ) {
+            reject_histogram_value(&child_plan, &format!("{func_name}()"))?;
+        }
 
         // Build sort expressions based on the sort function variant.
         let sort_exprs = match &sort_func {
@@ -1122,6 +1161,9 @@ async fn plan_binary(
             // scalar op vector
             let scalar_val = extract_scalar(&bin.lhs)?;
             let rhs_plan = Box::pin(plan_expr(&bin.rhs, source, time_range, params)).await?;
+            // histogram-aware: see Task 2.x. ScalarBinaryEval expects a
+            // Float64 value column on its input.
+            reject_histogram_value(&rhs_plan, &format!("scalar {op} histogram"))?;
             let node = ScalarBinaryEval::new(rhs_plan, scalar_val, op, true, return_bool)?;
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),
@@ -1131,6 +1173,9 @@ async fn plan_binary(
             // vector op scalar
             let scalar_val = extract_scalar(&bin.rhs)?;
             let lhs_plan = Box::pin(plan_expr(&bin.lhs, source, time_range, params)).await?;
+            // histogram-aware: see Task 2.x. ScalarBinaryEval expects a
+            // Float64 value column on its input.
+            reject_histogram_value(&lhs_plan, &format!("histogram {op} scalar"))?;
             let node = ScalarBinaryEval::new(lhs_plan, scalar_val, op, false, return_bool)?;
             Ok(LogicalPlan::Extension(Extension {
                 node: Arc::new(node),
@@ -1140,6 +1185,12 @@ async fn plan_binary(
             // vector op vector
             let lhs_plan = Box::pin(plan_expr(&bin.lhs, source, time_range, params)).await?;
             let rhs_plan = Box::pin(plan_expr(&bin.rhs, source, time_range, params)).await?;
+
+            // histogram-aware: see Task 2.x. BinaryEval performs scalar
+            // arithmetic on matched rows; histogram-on-either-side requires
+            // a histogram-aware code path (Phase 4/5).
+            reject_histogram_value(&lhs_plan, &format!("histogram {op} vector"))?;
+            reject_histogram_value(&rhs_plan, &format!("vector {op} histogram"))?;
 
             let matching = extract_vector_matching(bin)?;
             let node = BinaryEval::new(lhs_plan, rhs_plan, op, return_bool, matching)?;
@@ -1202,6 +1253,10 @@ async fn plan_unary(
     // Unary negation: multiply by -1
     let child_plan = Box::pin(plan_expr(&unary.expr, source, time_range, params)).await?;
 
+    // histogram-aware: see Task 2.x. Unary `-` is lowered to a scalar
+    // multiply, which is undefined for histogram-typed value columns.
+    reject_histogram_value(&child_plan, "unary -")?;
+
     use crate::node::BinaryOp;
     let node = ScalarBinaryEval::new(child_plan, -1.0, BinaryOp::Mul, true, false)?;
     Ok(LogicalPlan::Extension(Extension {
@@ -1240,6 +1295,10 @@ async fn plan_datetime_function(
     // dt_func(timestamp) and drops `__name__`.
     let vector_arg = &call.args.args[0];
     let child_plan = Box::pin(plan_expr(vector_arg, source, time_range, params)).await?;
+    // histogram-aware: see Task 2.x. The lowering rewrites `value` from
+    // Float64 → Float64; against a histogram-typed value column the
+    // projection would type-mismatch.
+    reject_histogram_value(&child_plan, &format!("{}()", dt_func))?;
     let func_expr = datetime_func_to_expr(dt_func, col("timestamp"));
     let node = DateTimeFunctionNode::new(child_plan, func_expr, dt_func.to_string())?;
     Ok(LogicalPlan::Extension(Extension {

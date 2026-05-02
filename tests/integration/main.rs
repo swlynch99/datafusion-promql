@@ -1,4 +1,5 @@
 mod functions;
+mod histogram_schema;
 mod instant_query;
 mod optimizations;
 mod range_query;
