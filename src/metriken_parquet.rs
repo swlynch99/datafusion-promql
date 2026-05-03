@@ -912,7 +912,7 @@ fn build_histogram_struct(
     idx_offsets.push(0);
     cnt_offsets.push(0);
 
-    for (idx_row, cnt_row) in delta_indices.into_iter().zip(delta_counts.into_iter()) {
+    for (idx_row, cnt_row) in delta_indices.into_iter().zip(delta_counts) {
         idx_values.extend(idx_row);
         cnt_values.extend(cnt_row);
         idx_offsets.push(i32::try_from(idx_values.len()).map_err(|_| {
