@@ -353,6 +353,7 @@ fn make_output_meta(
         col_name,
         metric_name: source.metric_name.clone(),
         labels,
+        value_kind: source.value_kind,
     }
 }
 
@@ -411,6 +412,7 @@ mod tests {
     use datafusion::optimizer::{Optimizer, OptimizerContext};
 
     use super::*;
+    use crate::datasource::ValueKind;
     use crate::node::{
         BinaryEval, BinaryOp, MatchCardinality, VectorMatching, WideColumnMeta, WideUnpack,
     };
@@ -441,6 +443,7 @@ mod tests {
             col_name: col_name.into(),
             metric_name: metric.into(),
             labels: l,
+            value_kind: ValueKind::Scalar,
         }
     }
 

@@ -215,6 +215,7 @@ mod tests {
     use datafusion::optimizer::{Optimizer, OptimizerContext};
 
     use super::*;
+    use crate::datasource::ValueKind;
     use crate::node::{ScalarBinaryEval, WideColumnMeta, WideUnpack};
     use crate::types::Labels;
 
@@ -242,6 +243,7 @@ mod tests {
                 col_name: col_name.into(),
                 metric_name: "cpu".into(),
                 labels,
+                value_kind: ValueKind::Scalar,
             }
         };
         let columns = Arc::new(vec![

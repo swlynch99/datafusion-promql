@@ -33,7 +33,9 @@ use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuil
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 
-use crate::datasource::{ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSource, TableFormat};
+use crate::datasource::{
+    ColumnMapping, MatchOp, Matcher, MetricMeta, MetricSource, TableFormat, ValueKind,
+};
 use crate::error::{PromqlError, Result};
 use crate::types::{Labels, TimeRange};
 
@@ -250,7 +252,8 @@ pub fn rezolus_column_mapping() -> ColumnMapping {
     }
 }
 
-/// Parse a column's metric name and labels from its Arrow field metadata.
+/// Parse a column's metric name, labels, and value kind from its Arrow field
+/// metadata.
 ///
 /// Follows the same convention as metriken-query:
 /// - The `"metric"` metadata key provides the metric name. If absent, the
@@ -261,12 +264,19 @@ pub fn rezolus_column_mapping() -> ColumnMapping {
 /// - If the field has no metadata at all, falls back to [`rezolus_parse_column`]
 ///   to parse metric name and labels from the column name using the
 ///   slash-based naming convention.
-pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
+///
+/// The [`ValueKind`] is inferred structurally from the field's data type and
+/// metadata via [`ValueKind::from_field`]: histogram-shaped columns (the
+/// canonical `Struct<indices, counts>` with `grouping_power` /
+/// `max_value_power` metadata) are tagged as
+/// [`ValueKind::Histogram`]; everything else is [`ValueKind::Scalar`].
+pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels, ValueKind)> {
     let meta = field.metadata();
 
     // No metadata: fall back to name-based parsing.
     if meta.is_empty() {
-        return rezolus_parse_column(field.name());
+        let (name, labels) = rezolus_parse_column(field.name())?;
+        return Some((name, labels, ValueKind::from_field(field)));
     }
 
     let name = if let Some(n) = meta.get("metric") {
@@ -288,7 +298,7 @@ pub fn parse_column_from_metadata(field: &Field) -> Option<(String, Labels)> {
         }
     }
 
-    Some((name, labels))
+    Some((name, labels, ValueKind::from_field(field)))
 }
 
 /// Parse a metric name and labels from a Rezolus-style slash-encoded column
@@ -375,7 +385,7 @@ fn build_metric_metadata(
             _ => continue,
         }
 
-        if let Some((metric_name, labels)) = (mapping.parse_column)(field.as_ref()) {
+        if let Some((metric_name, labels, _)) = (mapping.parse_column)(field.as_ref()) {
             let entry = metric_labels.entry(metric_name).or_default();
             for key in labels.keys() {
                 entry.insert(key.clone());
@@ -421,7 +431,7 @@ fn build_metric_column_indices(
             _ => continue,
         }
 
-        if let Some((metric_name, _)) = (mapping.parse_column)(field.as_ref()) {
+        if let Some((metric_name, _, _)) = (mapping.parse_column)(field.as_ref()) {
             metric_map.entry(metric_name).or_default().push(idx);
         }
     }
@@ -875,7 +885,7 @@ mod tests {
         meta.insert("metric".to_string(), "cpu_usage".to_string());
         meta.insert("cpu".to_string(), "0".to_string());
         let field = make_field("cpu_usage/0", meta);
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "cpu_usage");
         assert_eq!(labels.get("cpu").unwrap(), "0");
         assert!(!labels.contains_key("metric"));
@@ -884,7 +894,7 @@ mod tests {
     #[test]
     fn test_column_name_fallback_no_metadata() {
         let field = make_field("cpu_cores", HashMap::new());
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "cpu_cores");
         assert!(labels.is_empty());
     }
@@ -892,7 +902,7 @@ mod tests {
     #[test]
     fn test_buckets_suffix_stripped_in_fallback() {
         let field = make_field("tcp_srtt:buckets", HashMap::new());
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "tcp_srtt");
         assert!(labels.is_empty());
     }
@@ -906,7 +916,7 @@ mod tests {
         meta.insert("max_value_power".to_string(), "63".to_string());
         meta.insert("op".to_string(), "read".to_string());
         let field = make_field("latency:buckets", meta);
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "latency");
         assert_eq!(labels.get("op").unwrap(), "read");
         assert_eq!(labels.len(), 1);
@@ -919,7 +929,7 @@ mod tests {
         meta.insert("op".to_string(), "net_rx".to_string());
         meta.insert("id".to_string(), "0".to_string());
         let field = make_field("softirq/net_rx/0", meta);
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "softirq");
         assert_eq!(labels.get("op").unwrap(), "net_rx");
         assert_eq!(labels.get("id").unwrap(), "0");
@@ -935,7 +945,7 @@ mod tests {
         );
         meta.insert("id".to_string(), "28".to_string());
         let field = make_field("cgroup_cpu_cycles//system.slice/chrony.service/28", meta);
-        let (name, labels) = parse_column_from_metadata(&field).unwrap();
+        let (name, labels, _kind) = parse_column_from_metadata(&field).unwrap();
         assert_eq!(name, "cgroup_cpu_cycles");
         assert_eq!(
             labels.get("cgroup").unwrap(),

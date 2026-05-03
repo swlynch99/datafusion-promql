@@ -15,7 +15,7 @@ use datafusion::optimizer::OptimizerRule;
 use datafusion::prelude::*;
 
 use datafusion_promql::PromqlEngine;
-use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat};
+use datafusion_promql::datasource::{Matcher, MetricMeta, MetricSource, TableFormat, ValueKind};
 use datafusion_promql::error::Result;
 use datafusion_promql::opt::logical::FoldRedundantAggregation;
 use datafusion_promql::types::{QueryResult, TimeRange};
@@ -216,7 +216,12 @@ impl MetricSource for SimpleSource {
     ) -> Result<(Arc<dyn TableProvider>, TableFormat)> {
         let table = MemTable::try_new(Arc::clone(&self.schema), vec![self.batches.clone()])
             .map_err(|e| datafusion_promql::error::PromqlError::DataSource(e.to_string()))?;
-        Ok((Arc::new(table), TableFormat::Long))
+        Ok((
+            Arc::new(table),
+            TableFormat::Long {
+                value_kind: ValueKind::Scalar,
+            },
+        ))
     }
 
     async fn list_metrics(&self, _name_matcher: Option<&Matcher>) -> Result<Vec<MetricMeta>> {

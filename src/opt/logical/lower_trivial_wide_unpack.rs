@@ -94,6 +94,7 @@ mod tests {
     use datafusion::optimizer::OptimizerContext;
 
     use super::*;
+    use crate::datasource::ValueKind;
     use crate::node::{WideColumnMeta, WideUnpack};
     use crate::types::Labels;
 
@@ -116,6 +117,7 @@ mod tests {
             col_name: "col_0".to_string(),
             metric_name: "cpu_cores".to_string(),
             labels: Labels::new(),
+            value_kind: ValueKind::Scalar,
         }]);
         let unpack = WideUnpack::new(input, columns, Arc::new(vec![])).unwrap();
         let plan = LogicalPlan::Extension(Extension {
@@ -149,6 +151,7 @@ mod tests {
             col_name: "col_0".to_string(),
             metric_name: "cpu_cores".to_string(),
             labels: Labels::new(),
+            value_kind: ValueKind::Scalar,
         }]);
         let unpack = WideUnpack::new_with_options(input, columns, Arc::new(vec![]), false).unwrap();
         let plan = LogicalPlan::Extension(Extension {
@@ -191,11 +194,13 @@ mod tests {
                 col_name: "col_0".to_string(),
                 metric_name: "cpu".to_string(),
                 labels: Labels::new(),
+                value_kind: ValueKind::Scalar,
             },
             WideColumnMeta {
                 col_name: "col_1".to_string(),
                 metric_name: "cpu".to_string(),
                 labels: Labels::new(),
+                value_kind: ValueKind::Scalar,
             },
         ]);
         let unpack = WideUnpack::new(input, columns, Arc::new(vec![])).unwrap();
@@ -221,6 +226,7 @@ mod tests {
             col_name: "col_0".to_string(),
             metric_name: "cpu_cores".to_string(),
             labels,
+            value_kind: ValueKind::Scalar,
         }]);
         let unpack =
             WideUnpack::new(input, columns, Arc::new(vec!["instance".to_string()])).unwrap();

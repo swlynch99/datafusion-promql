@@ -170,7 +170,7 @@ pub(crate) async fn plan_vector_selector(
 
             return Ok((plan, label_columns));
         }
-        TableFormat::Long => {}
+        TableFormat::Long { value_kind: _ } => {}
     }
 
     // Determine label columns from the provider schema.
