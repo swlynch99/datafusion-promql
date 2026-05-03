@@ -14,6 +14,9 @@ pub mod plan;
 #[cfg(feature = "parquet")]
 pub mod parquet;
 
+#[cfg(feature = "metriken")]
+pub mod metriken_parquet;
+
 use std::sync::Arc;
 
 use arrow::array::{AsArray, ListArray};
