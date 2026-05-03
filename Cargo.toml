@@ -54,6 +54,4 @@ libc = "0.2.185"
 nix = { version = "0.31.2", features = ["signal"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
-metriken-exposition = { path = "../metriken/metriken-exposition", features = ["parquet"] }
-metriken = { path = "../metriken/metriken" }
 histogram = "1.3"
